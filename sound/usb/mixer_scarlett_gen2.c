@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- *   Focusrite Scarlett 6i6/18i8/18i20 Gen 2 and 4i4/8i6 Gen 3 Driver
- *   for ALSA
+ *   Focusrite Scarlett 6i6/18i8/18i20 Gen 2 and 4i4/8i6/18i8/18i20
+ *   Gen 3 Driver for ALSA
  *
  *   Copyright (c) 2018-2020 by Geoffrey D. Bennett <g at b4.vu>
  *
@@ -21,8 +21,8 @@
  */
 
 /* Mixer Interface for the Focusrite Scarlett 6i6/18i8/18i20 Gen 2 and
- * 4i4/8i6 Gen 3 audio interfaces. Based on the Gen 1 driver and
- * rewritten.
+ * 4i4/8i6/18i8/18i20 Gen 3 audio interfaces. Based on the Gen 1
+ * driver and rewritten.
  */
 
 /* The protocol was reverse engineered by looking at the communication
@@ -36,7 +36,11 @@
  *
  * Scarlett 4i4/8i6 Gen 3 support added in May 2020 (thanks to Laurent
  * Debricon for donating a 4i4 and to Fredrik Unger for providing 8i6
- * usbmon output).
+ * usbmon output and testing).
+ *
+ * Scarlett 18i8/18i20 Gen 3 support added in June 2020 (thanks to
+ * Darren Jaeckel, Alex Sedlack, and Lunel Clovis for providing usbmon
+ * output and testing).
  *
  * This ALSA mixer gives access to (model-dependent):
  *  - input, output, mixer-matrix muxes
@@ -103,8 +107,8 @@
  * proprietary software, MSD mode can be disabled by:
  * - holding down the 48V button for five seconds while powering on
  *   the device, or
- * - use this driver and alsamixer to change the "MSD Mode" setting to
- *   Off, wait two seconds, then power-cycle the device
+ * - using this driver and alsamixer to change the "MSD Mode" setting
+ *   to Off, waiting two seconds, then power-cycling the device
  */
 
 #include <linux/slab.h>
@@ -125,6 +129,11 @@
 
 /* device_setup value to allow turning MSD mode back on */
 #define SCARLETT2_MSD_ENABLE 0x02
+
+/* temporary device_setup value to enable interrupt polling for
+ * Gen 3 18i8/18i20 while we debug
+ */
+#define SCARLETT2_DEBUG_INT 0x04
 
 /* some gui mixers can't handle negative ctl values */
 #define SCARLETT2_VOLUME_BIAS 127
@@ -159,7 +168,7 @@ static const u16 scarlett2_mixer_values[173] = {
 /* Maximum number of analogue outputs */
 #define SCARLETT2_ANALOGUE_MAX 10
 
-/* Maximum number of level and pad switches */
+/* Maximum number of level, pad, and air switches */
 #define SCARLETT2_LEVEL_SWITCH_MAX 2
 #define SCARLETT2_PAD_SWITCH_MAX 4
 #define SCARLETT2_AIR_SWITCH_MAX 2
@@ -375,7 +384,7 @@ static const struct scarlett2_device_info s18i8_gen2_info = {
 		},
 		[SCARLETT2_PORT_TYPE_PCM] = {
 			.id = 0x600,
-			.num = { 20, 18, 18, 14, 10 },
+			.num = { 8, 18, 18, 14, 10 },
 			.src_descr = "PCM %d",
 			.src_num_offset = 1,
 			.dst_descr = "PCM %02d Capture"
@@ -549,7 +558,7 @@ static const struct scarlett2_device_info s8i6_gen3_info = {
 		},
 		[SCARLETT2_PORT_TYPE_MIX] = {
 			.id = 0x300,
-			.num = { 8, 8, 8, 8, 8 }, // *** check these numbers
+			.num = { 8, 8, 8, 8, 8 },
 			.src_descr = "Mix %c",
 			.src_num_offset = 65,
 			.dst_descr = "Mixer Input %02d Capture"
@@ -557,6 +566,159 @@ static const struct scarlett2_device_info s8i6_gen3_info = {
 		[SCARLETT2_PORT_TYPE_PCM] = {
 			.id = 0x600,
 			.num = { 6, 10, 10, 10, 10 },
+			.src_descr = "PCM %d",
+			.src_num_offset = 1,
+			.dst_descr = "PCM %02d Capture"
+		},
+	},
+};
+
+static const struct scarlett2_device_info s18i8_gen3_info = {
+	/* The analogue line outputs on the 18i8 can be switched
+	 * between software and hardware volume control
+	 */
+	.line_out_hw_vol = 1,
+
+	/* The first two analogue inputs can be switched between line
+	 * and instrument levels.
+	 */
+	.level_input_count = 2,
+
+	/* The first four analogue inputs have an optional pad. */
+	.pad_input_count = 4,
+
+	/* The first four analogue inputs have an optional "air" feature. */
+	.air_input_count = 4,
+
+	/* Gen 3 devices have an MSD mode */
+	.has_msd_mode = 1,
+
+	.line_out_descrs = {
+		"Monitor 1 L",
+		"Monitor 1 R",
+		"Headphones 1 L",
+		"Headphones 1 R",
+		"Headphones 2 L",
+		"Headphones 2 R",
+		"Monitor 2 L",
+		"Monitor 2 R",
+	},
+
+	.ports = {
+		[SCARLETT2_PORT_TYPE_NONE] = {
+			.id = 0x000,
+			.num = { 1, 0, 10, 10, 10 },
+			.src_descr = "Off",
+			.src_num_offset = 0,
+		},
+		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
+			.id = 0x080,
+			.num = { 8, 8, 8, 8, 8 },
+			.src_descr = "Analogue %d",
+			.src_num_offset = 1,
+			.dst_descr = "Analogue Output %02d Playback"
+		},
+		[SCARLETT2_PORT_TYPE_SPDIF] = {
+			.id = 0x180,
+			.num = { 2, 2, 2, 2, 2 },
+			.src_descr = "S/PDIF %d",
+			.src_num_offset = 1,
+			.dst_descr = "S/PDIF Output %d Playback"
+		},
+		[SCARLETT2_PORT_TYPE_ADAT] = {
+			.id = 0x200,
+			.num = { 8, 0, 0, 0, 0 },
+			.src_descr = "ADAT %d",
+			.src_num_offset = 1,
+		},
+		[SCARLETT2_PORT_TYPE_MIX] = {
+			.id = 0x300,
+			.num = { 10, 20, 20, 20, 20 },
+			.src_descr = "Mix %c",
+			.src_num_offset = 65,
+			.dst_descr = "Mixer Input %02d Capture"
+		},
+		[SCARLETT2_PORT_TYPE_PCM] = {
+			.id = 0x600,
+			.num = { 8, 20, 20, 16, 10 },
+			.src_descr = "PCM %d",
+			.src_num_offset = 1,
+			.dst_descr = "PCM %02d Capture"
+		},
+	},
+};
+
+static const struct scarlett2_device_info s18i20_gen3_info = {
+	/* The analogue line outputs on the 18i20 can be switched
+	 * between software and hardware volume control
+	 */
+	.line_out_hw_vol = 1,
+
+	/* The first two analogue inputs can be switched between line
+	 * and instrument levels.
+	 */
+	.level_input_count = 2,
+
+	/* The first eight analogue inputs have an optional pad. */
+	.pad_input_count = 8,
+
+	/* The first eight analogue inputs have an optional "air" feature. */
+	.air_input_count = 8,
+
+	/* Gen 3 devices have an MSD mode */
+	.has_msd_mode = 1,
+
+	.line_out_descrs = {
+		"Monitor L",
+		"Monitor R",
+		NULL,
+		NULL,
+		NULL,
+		NULL,
+		"Headphones 1 L",
+		"Headphones 1 R",
+		"Headphones 2 L",
+		"Headphones 2 R",
+	},
+
+	.ports = {
+		[SCARLETT2_PORT_TYPE_NONE] = {
+			.id = 0x000,
+			.num = { 1, 0, 13, 11, 0 },
+			.src_descr = "Off",
+			.src_num_offset = 0,
+		},
+		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
+			.id = 0x080,
+			.num = { 8, 10, 10, 10, 10 },
+			.src_descr = "Analogue %d",
+			.src_num_offset = 1,
+			.dst_descr = "Analogue Output %02d Playback"
+		},
+		[SCARLETT2_PORT_TYPE_SPDIF] = {
+			.id = 0x180,
+			.num = { 2, 2, 2, 2, 2 },
+			.src_descr = "S/PDIF %d",
+			.src_num_offset = 1,
+			.dst_descr = "S/PDIF Output %d Playback"
+		},
+		[SCARLETT2_PORT_TYPE_ADAT] = {
+			.id = 0x200,
+			.num = { 8, 8, 8, 8, 0 },
+			.src_descr = "ADAT %d",
+			.src_num_offset = 1,
+			.dst_descr = "ADAT Output %d Playback"
+		},
+		[SCARLETT2_PORT_TYPE_MIX] = {
+			.id = 0x300,
+			.num = { 12, 24, 24, 24, 24 },
+			.src_descr = "Mix %c",
+			.src_num_offset = 65,
+			.dst_descr = "Mixer Input %02d Capture"
+		},
+		[SCARLETT2_PORT_TYPE_PCM] = {
+			.id = 0x600,
+			.num = { 20, 20, 20, 18, 10 },
 			.src_descr = "PCM %d",
 			.src_num_offset = 1,
 			.dst_descr = "PCM %02d Capture"
@@ -643,7 +805,9 @@ enum {
 	SCARLETT2_CONFIG_MSD_SWITCH = 7,
 	SCARLETT2_CONFIG_ALT_SPEAKER_SWITCH = 8,
 	SCARLETT2_CONFIG_SPEAKER_SWITCH = 9,
-	SCARLETT2_CONFIG_COUNT = 10
+	SCARLETT2_CONFIG_GAIN_HALO_1 = 10,
+	SCARLETT2_CONFIG_GAIN_HALO_2 = 11,
+	SCARLETT2_CONFIG_COUNT = 12
 };
 
 /* Location, size, and activation command number for the configuration
@@ -725,6 +889,20 @@ static const struct scarlett2_config
 		.offset = 0xa0,
 		.size = 1,
 		.activate = 10
+	},
+
+	/* Gain Halos */
+	{
+		.offset = 0xa1,
+		.size = 1,
+		.activate = 9
+	},
+
+	/* Gain Halo? */
+	{
+		.offset = 0xa8,
+		.size = 1,
+		.activate = 11
 	}
 };
 
@@ -2425,6 +2603,12 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer)
 	case USB_ID(0x1235, 0x8213):
 		info = &s8i6_gen3_info;
 		break;
+	case USB_ID(0x1235, 0x8214):
+		info = &s18i8_gen3_info;
+		break;
+	case USB_ID(0x1235, 0x8215):
+		info = &s18i20_gen3_info;
+		break;
 	default: /* device not (yet) supported */
 		return -EINVAL;
 	}
@@ -2487,8 +2671,12 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer)
 	if (err < 0)
 		return err;
 
-	/* Set up the interrupt polling if there are hardware buttons */
-	if (info->button_count) {
+	/* Set up the interrupt polling if there is a hardware volume
+	 * control
+	 */
+	if (info->button_count ||
+		(mixer->chip->setup & SCARLETT2_DEBUG_INT)) {
+//	if (info->line_out_hw_vol) {
 		err = scarlett2_mixer_status_create(mixer);
 		if (err < 0)
 			return err;
