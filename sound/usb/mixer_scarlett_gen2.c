@@ -544,7 +544,7 @@ static const struct scarlett2_device_info s8i6_gen3_info = {
 		},
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
 			.id = 0x080,
-			.num = { 4, 4, 4, 4, 4 },
+			.num = { 6, 4, 4, 4, 4 },
 			.src_descr = "Analogue %d",
 			.src_num_offset = 1,
 			.dst_descr = "Analogue Output %02d Playback"
