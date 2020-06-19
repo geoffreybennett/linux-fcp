@@ -39,7 +39,7 @@
  * usbmon output and testing).
  *
  * Scarlett 18i8/18i20 Gen 3 support added in June 2020 (thanks to
- * Darren Jaeckel, Alex Sedlack, and Lunel Clovis for providing usbmon
+ * Darren Jaeckel, Alex Sedlack, and Clovis Lunel for providing usbmon
  * output and testing).
  *
  * This ALSA mixer gives access to (model-dependent):
@@ -170,22 +170,22 @@ static const u16 scarlett2_mixer_values[173] = {
 
 /* Maximum number of level, pad, and air switches */
 #define SCARLETT2_LEVEL_SWITCH_MAX 2
-#define SCARLETT2_PAD_SWITCH_MAX 4
-#define SCARLETT2_AIR_SWITCH_MAX 2
+#define SCARLETT2_PAD_SWITCH_MAX 8
+#define SCARLETT2_AIR_SWITCH_MAX 8
 
 /* Maximum number of inputs to the mixer */
-#define SCARLETT2_INPUT_MIX_MAX 18
+#define SCARLETT2_INPUT_MIX_MAX 24
 
 /* Maximum number of outputs from the mixer */
-#define SCARLETT2_OUTPUT_MIX_MAX 10
+#define SCARLETT2_OUTPUT_MIX_MAX 12
 
 /* Maximum size of the data in the USB mux assignment message:
- * 18 inputs, 20 outputs, 18 matrix inputs, 8 spare
+ * 18 inputs, 2 loopbacks, 20 outputs, 24 mixer inputs, 13 spare
  */
-#define SCARLETT2_MUX_MAX 64
+#define SCARLETT2_MUX_MAX 77
 
 /* Number of meters:
- * 18 inputs, 20 outputs, 18 matrix inputs
+ * 18 inputs, 20 outputs, 18 matrix inputs (XX FIXME)
  */
 #define SCARLETT2_NUM_METERS 56
 
