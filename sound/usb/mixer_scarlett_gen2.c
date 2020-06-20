@@ -271,7 +271,6 @@ struct scarlett2_mixer_data {
 	struct snd_kcontrol *master_vol_ctl;
 	struct snd_kcontrol *vol_ctls[SCARLETT2_ANALOGUE_MAX];
 	struct snd_kcontrol *button_ctls[SCARLETT2_BUTTON_MAX];
-	struct snd_kcontrol *msd_ctl;
 	u8 mux[SCARLETT2_MUX_MAX];
 	u8 mix[SCARLETT2_INPUT_MIX_MAX * SCARLETT2_OUTPUT_MIX_MAX];
 };
@@ -2254,8 +2253,7 @@ static int scarlett2_add_msd_ctl(struct usb_mixer_interface *mixer)
 
 	/* Add MSD control */
 	return scarlett2_add_new_ctl(mixer, &scarlett2_msd_ctl,
-				     0, 1, "MSD Mode",
-				     &private->msd_ctl);
+				     0, 1, "MSD Mode", NULL);
 }
 
 /*** Cleanup/Suspend Callbacks ***/
