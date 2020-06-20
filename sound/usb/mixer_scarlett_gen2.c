@@ -49,6 +49,7 @@
  *  - level meters
  *  - line/inst level, pad, and air controls
  *  - enable/disable MSD mode
+ *  - main/alt speaker switching
  *
  * <ditaa>
  *    /--------------\    18chn            20chn     /--------------\
@@ -246,6 +247,7 @@ struct scarlett2_device_info {
 	u8 pad_input_count; /* inputs with pad selectable */
 	u8 air_input_count; /* inputs with air selectable */
 	u8 has_msd_mode; /* Gen 3 devices have an internal MSD mode switch */
+	u8 has_speaker_switching; /* main/alt speaker switching */
 	const char * const line_out_descrs[SCARLETT2_ANALOGUE_MAX];
 	struct scarlett2_ports ports[SCARLETT2_PORT_TYPE_COUNT];
 };
@@ -267,6 +269,7 @@ struct scarlett2_mixer_data {
 	u8 pad_switch[SCARLETT2_PAD_SWITCH_MAX];
 	u8 air_switch[SCARLETT2_AIR_SWITCH_MAX];
 	u8 msd_switch;
+	u8 speaker_switch;
 	u8 buttons[SCARLETT2_BUTTON_MAX];
 	struct snd_kcontrol *master_vol_ctl;
 	struct snd_kcontrol *vol_ctls[SCARLETT2_ANALOGUE_MAX];
@@ -592,6 +595,9 @@ static const struct scarlett2_device_info s18i8_gen3_info = {
 	/* Gen 3 devices have an MSD mode */
 	.has_msd_mode = 1,
 
+	/* Has a main/alt speaker switch */
+	.has_speaker_switching = 1,
+
 	.line_out_descrs = {
 		"Monitor 1 L",
 		"Monitor 1 R",
@@ -666,6 +672,9 @@ static const struct scarlett2_device_info s18i20_gen3_info = {
 
 	/* Gen 3 devices have an MSD mode */
 	.has_msd_mode = 1,
+
+	/* Has a main/alt speaker switch */
+	.has_speaker_switching = 1,
 
 	.line_out_descrs = {
 		"Monitor L",
@@ -802,8 +811,8 @@ enum {
 	SCARLETT2_CONFIG_AIR_SWITCH = 5,
 	SCARLETT2_CONFIG_SPDIF_SWITCH = 6,
 	SCARLETT2_CONFIG_MSD_SWITCH = 7,
-	SCARLETT2_CONFIG_ALT_SPEAKER_SWITCH = 8,
-	SCARLETT2_CONFIG_SPEAKER_SWITCH = 9,
+	SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH = 8,
+	SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH = 9,
 	SCARLETT2_CONFIG_GAIN_HALO_1 = 10,
 	SCARLETT2_CONFIG_GAIN_HALO_2 = 11,
 	SCARLETT2_CONFIG_TALKBACK = 12,
@@ -2256,6 +2265,90 @@ static int scarlett2_add_msd_ctl(struct usb_mixer_interface *mixer)
 				     0, 1, "MSD Mode", NULL);
 }
 
+/*** Speaker Switching Control ***/
+
+static int scarlett2_speaker_switch_enum_ctl_info(
+	struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo)
+{
+	static const char *const values[3] = {
+		"Off", "Main", "Alt"
+	};
+
+	return snd_ctl_enum_info(uinfo, 1, 3, values);
+}
+
+static int scarlett2_speaker_switch_enum_ctl_get(
+	struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct scarlett2_mixer_data *private = elem->head.mixer->private_data;
+
+	ucontrol->value.enumerated.item[0] =
+		private->speaker_switch;
+	return 0;
+}
+
+static int scarlett2_speaker_switch_enum_ctl_put(
+	struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+
+	int oval, val, err = 0;
+
+	mutex_lock(&private->data_mutex);
+
+	oval = private->speaker_switch;
+	val = ucontrol->value.integer.value[0];
+
+	if (oval == val)
+		goto unlock;
+
+	private->speaker_switch = val;
+
+	/* enable/disable speaker switching */
+	if (oval == 0 || val == 0) {
+		err = scarlett2_usb_set_config(
+			mixer, SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH,
+			0, !!val);
+	}
+
+	/* if speaker switching is enabled, select main or alt */
+	if (!err && val) {
+		int alt_speaker = (val == 2);
+		err = scarlett2_usb_set_config(
+			mixer, SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH,
+			0, alt_speaker);
+	}
+
+unlock:
+	mutex_unlock(&private->data_mutex);
+	return err;
+}
+
+static const struct snd_kcontrol_new scarlett2_speaker_switch_enum_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "",
+	.info = scarlett2_speaker_switch_enum_ctl_info,
+	.get  = scarlett2_speaker_switch_enum_ctl_get,
+	.put  = scarlett2_speaker_switch_enum_ctl_put,
+};
+
+static int scarlett2_add_speaker_switch_ctl(
+	struct usb_mixer_interface *mixer)
+{
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
+
+	if (!info->has_speaker_switching)
+		return 0;
+
+	return scarlett2_add_new_ctl(
+		mixer, &scarlett2_speaker_switch_enum_ctl,
+		0, 1, "Speaker Switching", NULL);
+}
+
 /*** Cleanup/Suspend Callbacks ***/
 
 static void scarlett2_private_free(struct usb_mixer_interface *mixer)
@@ -2403,6 +2496,7 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 	u8 pad_switches[SCARLETT2_PAD_SWITCH_MAX];
 	u8 air_switches[SCARLETT2_AIR_SWITCH_MAX];
 	u8 msd_switch;
+	u8 speaker_switch;
 	struct scarlett2_usb_volume_status volume_status;
 	int err, i;
 
@@ -2451,6 +2545,32 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 		if (err < 0)
 			return err;
 		private->msd_switch = msd_switch;
+	}
+
+	if (info->has_speaker_switching) {
+
+		/* check if speaker switching is enabled */
+		err = scarlett2_usb_get_config(
+			mixer,
+			SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH,
+			1, &speaker_switch);
+		if (err < 0)
+			return err;
+
+		/* not enabled */
+		if (!speaker_switch) {
+			private->speaker_switch = 0;
+
+		/* is enabled; check if main or alt speakers are selected */
+		} else {
+			err = scarlett2_usb_get_config(
+				mixer,
+				SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH,
+				1, &speaker_switch);
+			if (err < 0)
+				return err;
+			private->speaker_switch = !!speaker_switch + 1;
+		}
 	}
 
 	err = scarlett2_usb_get_volume_status(mixer, &volume_status);
@@ -2674,6 +2794,11 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer)
 
 	/* Create the MSD control */
 	err = scarlett2_add_msd_ctl(mixer);
+	if (err < 0)
+		return err;
+
+	/* Create the speaker switch control */
+	err = scarlett2_add_speaker_switch_ctl(mixer);
 	if (err < 0)
 		return err;
 
