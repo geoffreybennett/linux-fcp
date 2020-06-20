@@ -1314,10 +1314,6 @@ static int scarlett2_usb_set_mux(struct usb_mixer_interface *mixer)
 							ports, private->mux[j]
 						) << 12
 					  );
-
-			/* skip private->mux[j] entries not output */
-			j += ports[port_type].num[SCARLETT2_PORT_OUT] -
-			     ports[port_type].num[port_dir_rate];
 		}
 
 		err = scarlett2_usb(mixer, SCARLETT2_USB_SET_MUX,
