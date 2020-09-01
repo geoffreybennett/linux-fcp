@@ -886,7 +886,7 @@ static const struct scarlett2_config
 		.activate = 6
 	},
 
-	/* Alternate Speaker */
+	/* Alternate Speaker and Talkback switches */
 	{
 		.offset = 0x9f,
 		.size = 1,
@@ -914,7 +914,7 @@ static const struct scarlett2_config
 		.activate = 11
 	},
 
-	/* Talkback */
+	/* Talkback enable on output 0xB0-0xB2? */
 	{
 		.offset = 0xb0,
 		.size = 1,
