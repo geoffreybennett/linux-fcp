@@ -579,6 +579,9 @@ static const struct scarlett2_device_info s18i8_gen3_info = {
 	 */
 	.line_out_hw_vol = 1,
 
+	/* Virtual mute and dim buttons */
+	.button_count = 2,
+
 	/* The first two analogue inputs can be switched between line
 	 * and instrument levels.
 	 */
@@ -656,6 +659,9 @@ static const struct scarlett2_device_info s18i20_gen3_info = {
 	 * between software and hardware volume control
 	 */
 	.line_out_hw_vol = 1,
+
+	/* Mute and dim buttons */
+	.button_count = 2,
 
 	/* The first two analogue inputs can be switched between line
 	 * and instrument levels.
