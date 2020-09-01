@@ -131,11 +131,6 @@
 /* device_setup value to allow turning MSD mode back on */
 #define SCARLETT2_MSD_ENABLE 0x02
 
-/* temporary device_setup value to enable interrupt polling for
- * Gen 3 18i8/18i20 while we debug
- */
-#define SCARLETT2_DEBUG_INT 0x04
-
 /* some gui mixers can't handle negative ctl values */
 #define SCARLETT2_VOLUME_BIAS 127
 
@@ -258,7 +253,10 @@ struct scarlett2_mixer_data {
 	struct mutex data_mutex; /* lock access to this data */
 	struct delayed_work work;
 	const struct scarlett2_device_info *info;
-	int interface;
+	__u8 interface; /* vendor-specific interface number */
+	__u8 endpoint; /* interrupt endpoint address */
+	__le16 maxpacketsize;
+	__u8 interval;
 	int num_mux_srcs;
 	u16 scarlett2_seq;
 	u8 vol_updated;
@@ -747,11 +745,6 @@ static int scarlett2_get_port_start_num(const struct scarlett2_ports *ports,
 }
 
 /*** USB Interactions ***/
-
-/* Vendor-Specific Interface, Endpoint, MaxPacketSize, Interval */
-#define SCARLETT2_USB_INTERRUPT_ENDPOINT 4
-#define SCARLETT2_USB_INTERRUPT_MAX_DATA 64
-#define SCARLETT2_USB_INTERRUPT_INTERVAL 3
 
 /* Interrupt flags for volume, mute/dim button, and sync changes */
 #define SCARLETT2_USB_INTERRUPT_SYNC_CHANGE 0x000008
@@ -2431,18 +2424,29 @@ static void scarlett2_init_routing(u8 *mux,
 }
 
 /* Look through the interface descriptors for the Focusrite Control
- * interface (bInterfaceClass = 255 Vendor Specific Class) and return
- * the interface number
+ * interface (bInterfaceClass = 255 Vendor Specific Class) and set the
+ * interface number, endpoint address, packet size, and interval in
+ * private
  */
-static int scarlett2_find_fc_interface(struct usb_device *dev) {
+static int scarlett2_find_fc_interface(struct usb_device *dev,
+				       struct scarlett2_mixer_data *private) {
 	struct usb_host_config *config = dev->actconfig;
 	int i;
 
 	for (i = 0; i < config->desc.bNumInterfaces; i++) {
+		struct usb_interface *intf = config->interface[i];
 		struct usb_interface_descriptor *desc =
-			&config->interface[i]->altsetting[0].desc;
-		if (desc->bInterfaceClass == 255)
-			return desc->bInterfaceNumber;
+			&intf->altsetting[0].desc;
+		if (desc->bInterfaceClass == 255) {
+			struct usb_endpoint_descriptor *epd =
+				get_endpoint(intf->altsetting, 0);
+			private->interface = desc->bInterfaceNumber;
+			private->endpoint = epd->bEndpointAddress &
+				USB_ENDPOINT_NUMBER_MASK;
+			private->maxpacketsize = epd->wMaxPacketSize;
+			private->interval = epd->bInterval;
+			return 0;
+		}
 	}
 
 	return -1;
@@ -2454,6 +2458,7 @@ static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 {
 	struct scarlett2_mixer_data *private =
 		kzalloc(sizeof(struct scarlett2_mixer_data), GFP_KERNEL);
+	int err;
 
 	if (!private)
 		return -ENOMEM;
@@ -2468,9 +2473,9 @@ static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 	private->num_mux_srcs = scarlett2_count_mux_srcs(info->ports);
 	private->scarlett2_seq = 0;
 	private->mixer = mixer;
-	private->interface = scarlett2_find_fc_interface(mixer->chip->dev);
+	err = scarlett2_find_fc_interface(mixer->chip->dev, private);
 
-	if (private->interface < 0)
+	if (err < 0)
 		return -EINVAL;
 
 	/* Setup default routing */
@@ -2668,8 +2673,8 @@ requeue:
 static int scarlett2_mixer_status_create(struct usb_mixer_interface *mixer)
 {
 	struct usb_device *dev = mixer->chip->dev;
-	unsigned int pipe = usb_rcvintpipe(dev,
-					   SCARLETT2_USB_INTERRUPT_ENDPOINT);
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	unsigned int pipe = usb_rcvintpipe(dev, private->endpoint);
 	void *transfer_buffer;
 
 	if (mixer->urb) {
@@ -2685,14 +2690,14 @@ static int scarlett2_mixer_status_create(struct usb_mixer_interface *mixer)
 	if (!mixer->urb)
 		return -ENOMEM;
 
-	transfer_buffer = kmalloc(SCARLETT2_USB_INTERRUPT_MAX_DATA, GFP_KERNEL);
+	transfer_buffer = kmalloc(private->maxpacketsize, GFP_KERNEL);
 	if (!transfer_buffer)
 		return -ENOMEM;
 
 	usb_fill_int_urb(mixer->urb, dev, pipe,
-			 transfer_buffer, SCARLETT2_USB_INTERRUPT_MAX_DATA,
+			 transfer_buffer, private->maxpacketsize,
 			 scarlett2_mixer_interrupt, mixer,
-			 SCARLETT2_USB_INTERRUPT_INTERVAL);
+			 private->interval);
 
 	return usb_submit_urb(mixer->urb, GFP_KERNEL);
 }
@@ -2800,9 +2805,7 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer)
 	/* Set up the interrupt polling if there is a hardware volume
 	 * control
 	 */
-	if (info->button_count ||
-		(mixer->chip->setup & SCARLETT2_DEBUG_INT)) {
-//	if (info->line_out_hw_vol) {
+	if (info->line_out_hw_vol) {
 		err = scarlett2_mixer_status_create(mixer);
 		if (err < 0)
 			return err;
