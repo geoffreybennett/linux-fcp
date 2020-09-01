@@ -2651,13 +2651,12 @@ static void scarlett2_mixer_interrupt(struct urb *urb)
 	struct usb_mixer_interface *mixer = urb->context;
 	int len = urb->actual_length;
 	int ustatus = urb->status;
-	u32 data;
 
 	if (ustatus != 0)
 		goto requeue;
 
 	if (len == 8) {
-		data = le32_to_cpu(*(u32 *)urb->transfer_buffer);
+		u32 data = le32_to_cpu(*(u32 *)urb->transfer_buffer);
 		if (data & SCARLETT2_USB_INTERRUPT_VOL_CHANGE)
 			scarlett2_mixer_interrupt_vol_change(mixer);
 		if (data & SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE)
