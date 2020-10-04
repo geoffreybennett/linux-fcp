@@ -4,6 +4,7 @@
  *   Gen 3 Driver for ALSA
  *
  *   Copyright (c) 2018-2020 by Geoffrey D. Bennett <g at b4.vu>
+ *   Copyright (c) 2018-2020 by Vladimir Sadovnikov <sadko4u at gmail.com>
  *
  *   Based on the Scarlett (Gen 1) Driver for ALSA:
  *
