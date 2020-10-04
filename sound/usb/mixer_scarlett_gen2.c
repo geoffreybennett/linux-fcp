@@ -753,10 +753,11 @@ static int scarlett2_get_port_start_num(const struct scarlett2_ports *ports,
 /*** USB Interactions ***/
 
 /* Interrupt flags for volume, mute/dim button, and sync changes */
-#define SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE 0x00000001
+#define SCARLETT2_USB_INTERRUPT_ACK 0x00000001
 #define SCARLETT2_USB_INTERRUPT_SYNC_CHANGE 0x00000008
 #define SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE 0x00200000
 #define SCARLETT2_USB_INTERRUPT_VOL_CHANGE 0x00400000
+#define SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE 0x01000000
 
 /* Commands for sending/receiving requests/responses */
 #define SCARLETT2_USB_CMD_INIT 0
@@ -2660,8 +2661,7 @@ static void scarlett2_mixer_interrupt(struct urb *urb)
 		u32 data = le32_to_cpu(*(u32 *)urb->transfer_buffer);
 		if (data & SCARLETT2_USB_INTERRUPT_VOL_CHANGE)
 			scarlett2_mixer_interrupt_vol_change(mixer);
-		if (data & SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE ||
-		    data & SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE)
+		if (data & (SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE | SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE))
 			scarlett2_mixer_interrupt_button_change(mixer);
 	} else {
 		usb_audio_err(mixer->chip,
