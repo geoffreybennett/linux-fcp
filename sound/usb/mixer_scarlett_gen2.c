@@ -246,6 +246,7 @@ struct scarlett2_device_info {
 	u8 power_48v_count; /* 48V phantom power */
 	u8 has_msd_mode; /* Gen 3 devices have an internal MSD mode switch */
 	u8 has_speaker_switching; /* main/alt speaker switching */
+	u8 has_talkback; /* 18i20 has Gen 3 has 'talkback' feature */
 	const char * const line_out_descrs[SCARLETT2_ANALOGUE_MAX];
 	struct scarlett2_ports ports[SCARLETT2_PORT_TYPE_COUNT];
 };
@@ -274,9 +275,11 @@ struct scarlett2_mixer_data {
 	u8 pow_switch[SCARLETT2_48V_SWITCH_MAX];
 	u8 msd_switch;
 	u8 speaker_switch;
+	u8 talkback_switch;
 	u8 buttons[SCARLETT2_BUTTON_MAX];
 	struct snd_kcontrol *master_vol_ctl;
 	struct snd_kcontrol *speaker_ctl;
+	struct snd_kcontrol *talkback_ctl;
 	struct snd_kcontrol *vol_ctls[SCARLETT2_ANALOGUE_MAX];
 	struct snd_kcontrol *pad_ctls[SCARLETT2_PAD_SWITCH_MAX];
 	struct snd_kcontrol *level_ctls[SCARLETT2_LEVEL_SWITCH_MAX];
@@ -702,6 +705,9 @@ static const struct scarlett2_device_info s18i20_gen3_info = {
 	/* Has a main/alt speaker switch */
 	.has_speaker_switching = 1,
 
+	/* Has a talkback speaker switch */
+	.has_talkback = 1,
+
 	.line_out_descrs = {
 		"Monitor L",
 		"Monitor R",
@@ -840,8 +846,7 @@ enum {
 	SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH = 10,
 	SCARLETT2_CONFIG_GAIN_HALO_1 = 11,
 	SCARLETT2_CONFIG_GAIN_HALO_2 = 12,
-	SCARLETT2_CONFIG_TALKBACK = 13,
-	SCARLETT2_CONFIG_COUNT = 14
+	SCARLETT2_CONFIG_COUNT = 13
 };
 
 /* Location, size, and activation command number for the configuration
@@ -944,13 +949,6 @@ static const struct scarlett2_config
 		.offset = 0xa8,
 		.size = 1,
 		.activate = 11
-	},
-
-	/* Talkback enable on output 0xB0-0xB2? */
-	{
-		.offset = 0xb0,
-		.size = 1,
-		.activate = 10
 	}
 };
 
@@ -2432,9 +2430,9 @@ static int scarlett2_update_speaker_switch_enum_ctl(struct usb_mixer_interface *
 {
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	const struct scarlett2_device_info *info = private->info;
-	u8 speaker_switch;
+	u8 speaker_switching, speaker_switch;
 	int err = 0;
-	
+
 	private->speaker_updated = 0;
 	if (!info->has_speaker_switching)
 		return 0;
@@ -2443,25 +2441,23 @@ static int scarlett2_update_speaker_switch_enum_ctl(struct usb_mixer_interface *
 	err = scarlett2_usb_get_config(
 		mixer,
 		SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH,
+		1, &speaker_switching);
+	if (err < 0)
+		return err;
+
+	/* get actual speaker & talkback configuration */
+	err = scarlett2_usb_get_config(
+		mixer,
+		SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH,
 		1, &speaker_switch);
 	if (err < 0)
 		return err;
-	
-	/* not enabled */
-	if (!speaker_switch) {
-		private->speaker_switch = 0;
 
-		/* is enabled; check if main or alt speakers are selected */
-	} else {
-		err = scarlett2_usb_get_config(
-			mixer,
-			SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH,
-			1, &speaker_switch);
-		if (err < 0)
-			return err;
-		private->speaker_switch = !!speaker_switch + 1;
-	}
-	
+	/* decode speaker & talkback values */
+	private->speaker_switch  = (speaker_switching) ? (speaker_switch & 1) + 1 : 0;
+	if (info->has_talkback)
+		private->talkback_switch = !!(speaker_switch & 2);
+
 	return 0;
 }
 
@@ -2493,6 +2489,63 @@ static int scarlett2_speaker_switch_enum_ctl_get(
 	return 0;
 }
 
+static int scarlett2_talkback_switch_ctl_get(
+	struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+
+	if (private->speaker_updated) {
+		mutex_lock(&private->data_mutex);
+		scarlett2_update_speaker_switch_enum_ctl(mixer);
+		mutex_unlock(&private->data_mutex);
+	}
+
+	ucontrol->value.enumerated.item[0] =
+		private->talkback_switch;
+	return 0;
+}
+
+static int scarlett2_speaker_switch_update_state(struct usb_mixer_interface *mixer, int alt, int talkback) {
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
+	int old_alt, old_talk, err = 0;
+
+	mutex_lock(&private->data_mutex);
+
+	old_alt = private->speaker_switch;
+	old_talk = private->talkback_switch;
+
+	if ((old_alt == alt) && (old_talk == talkback))
+		goto unlock;
+
+	private->speaker_switch = alt;
+	private->talkback_switch = talkback;
+	
+	/* enable/disable speaker switching */
+	if (old_alt == 0 || alt == 0) {
+		err = scarlett2_usb_set_config(
+			mixer, SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH,
+			0, !!alt);
+	}
+
+	/* update talkback speaker and talkback */
+	if (!err) {
+		int val = (alt == 2);
+		if (info->has_talkback)
+			val |= talkback << 1;
+
+		err = scarlett2_usb_set_config(
+			mixer, SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH,
+			0, val);
+	}
+
+unlock:
+	mutex_unlock(&private->data_mutex);
+	return err;
+}
+
 static int scarlett2_speaker_switch_enum_ctl_put(
 	struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
 {
@@ -2500,36 +2553,21 @@ static int scarlett2_speaker_switch_enum_ctl_put(
 	struct usb_mixer_interface *mixer = elem->head.mixer;
 	struct scarlett2_mixer_data *private = mixer->private_data;
 
-	int oval, val, err = 0;
+	return scarlett2_speaker_switch_update_state(mixer, 
+						     ucontrol->value.integer.value[0],
+						     private->talkback_switch);
+}
 
-	mutex_lock(&private->data_mutex);
+static int scarlett2_talkback_switch_ctl_put(
+	struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
 
-	oval = private->speaker_switch;
-	val = ucontrol->value.integer.value[0];
-
-	if (oval == val)
-		goto unlock;
-
-	private->speaker_switch = val;
-
-	/* enable/disable speaker switching */
-	if (oval == 0 || val == 0) {
-		err = scarlett2_usb_set_config(
-			mixer, SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH,
-			0, !!val);
-	}
-
-	/* if speaker switching is enabled, select main or alt */
-	if (!err && val) {
-		int alt_speaker = (val == 2);
-		err = scarlett2_usb_set_config(
-			mixer, SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH,
-			0, alt_speaker);
-	}
-
-unlock:
-	mutex_unlock(&private->data_mutex);
-	return err;
+	return scarlett2_speaker_switch_update_state(mixer, 
+						     private->speaker_switch,
+						     ucontrol->value.integer.value[0]);
 }
 
 static const struct snd_kcontrol_new scarlett2_speaker_switch_enum_ctl = {
@@ -2540,18 +2578,42 @@ static const struct snd_kcontrol_new scarlett2_speaker_switch_enum_ctl = {
 	.put  = scarlett2_speaker_switch_enum_ctl_put,
 };
 
+static const struct snd_kcontrol_new scarlett2_talkback_switch_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "",
+	.info = snd_ctl_boolean_mono_info,
+	.get  = scarlett2_talkback_switch_ctl_get,
+	.put  = scarlett2_talkback_switch_ctl_put,
+};
+
 static int scarlett2_add_speaker_switch_ctl(
 	struct usb_mixer_interface *mixer)
 {
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	const struct scarlett2_device_info *info = private->info;
+	int err = 0;
 
-	if (!info->has_speaker_switching)
-		return 0;
-
-	return scarlett2_add_new_ctl(
-		mixer, &scarlett2_speaker_switch_enum_ctl,
-		0, 1, "Speaker Switching", &private->speaker_ctl);
+	if (info->has_speaker_switching) {
+		/* Add speaker switching control */
+		err = scarlett2_add_new_ctl(
+			mixer, &scarlett2_speaker_switch_enum_ctl,
+			0, 1, "Speaker Switching", &private->speaker_ctl);
+		
+		if (err < 0)
+			return err;
+	}
+	
+	if (info->has_talkback) {
+		/* Add talkback switching control */
+		err = scarlett2_add_new_ctl(
+			mixer, &scarlett2_talkback_switch_ctl,
+			0, 1, "Talkback Switching", &private->talkback_ctl);
+		
+		if (err < 0)
+			return err;
+	}
+	
+	return 0;
 }
 
 /*** Cleanup/Suspend Callbacks ***/
@@ -2692,6 +2754,7 @@ static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 	private->mixer = mixer;
 	private->vol_updated = 0;
 	private->line_ctl_updated = 0;
+	private->talkback_switch = 0;
 	err = scarlett2_find_fc_interface(mixer->chip->dev, private);
 
 	if (err < 0)
@@ -2715,7 +2778,7 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 	u8 pad_switches[SCARLETT2_PAD_SWITCH_MAX];
 	u8 air_switches[SCARLETT2_AIR_SWITCH_MAX];
 	u8 msd_switch;
-	u8 speaker_switch;
+	u8 speaker_switching, speaker_switch;
 	u8 pow_switch;
 	struct scarlett2_usb_volume_status volume_status;
 	int err, i;
@@ -2784,30 +2847,28 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 		private->msd_switch = msd_switch;
 	}
 
+	/* Speaker switching (ALT button) and optional TALKBACK button */
 	if (info->has_speaker_switching) {
-
 		/* check if speaker switching is enabled */
 		err = scarlett2_usb_get_config(
 			mixer,
 			SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH,
+			1, &speaker_switching);
+		if (err < 0)
+			return err;
+	
+		/* get actual speaker & talkback configuration */
+		err = scarlett2_usb_get_config(
+			mixer,
+			SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH,
 			1, &speaker_switch);
 		if (err < 0)
 			return err;
 
-		/* not enabled */
-		if (!speaker_switch) {
-			private->speaker_switch = 0;
-
-		/* is enabled; check if main or alt speakers are selected */
-		} else {
-			err = scarlett2_usb_get_config(
-				mixer,
-				SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH,
-				1, &speaker_switch);
-			if (err < 0)
-				return err;
-			private->speaker_switch = !!speaker_switch + 1;
-		}
+		/* decode speaker & talkback values */
+		private->speaker_switch  = (speaker_switching) ? (speaker_switch & 1) + 1 : 0;
+		if (info->has_talkback)
+			private->talkback_switch = !!(speaker_switch & 2);
 	}
 
 	err = scarlett2_usb_get_volume_status(mixer, &volume_status);
@@ -2925,6 +2986,10 @@ static void scarlett2_mixer_interrupt_speaker_change(
 
 	snd_ctl_notify(mixer->chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
 		       &private->speaker_ctl->id);
+
+	if (private->info->has_talkback)
+		snd_ctl_notify(mixer->chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
+			       &private->talkback_ctl->id);
 }
 
 /* Interrupt callback */
