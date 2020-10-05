@@ -262,6 +262,7 @@ struct scarlett2_mixer_data {
 	u16 scarlett2_seq;
 	u8 vol_updated; /* Flag that indicates that volume has been updated */
 	u8 pads_updated; /* Flag that indicates that amplification pads have been updated */
+	u8 speaker_updated; /* Flag that indicates that speaker/talkback has been updated */
 	u8 master_vol;
 	u8 vol[SCARLETT2_ANALOGUE_MAX];
 	u8 vol_sw_hw_switch[SCARLETT2_ANALOGUE_MAX];
@@ -272,6 +273,7 @@ struct scarlett2_mixer_data {
 	u8 speaker_switch;
 	u8 buttons[SCARLETT2_BUTTON_MAX];
 	struct snd_kcontrol *master_vol_ctl;
+	struct snd_kcontrol *speaker_ctl;
 	struct snd_kcontrol *vol_ctls[SCARLETT2_ANALOGUE_MAX];
 	struct snd_kcontrol *pad_ctls[SCARLETT2_PAD_SWITCH_MAX];
 	struct snd_kcontrol *button_ctls[SCARLETT2_BUTTON_MAX];
@@ -2322,6 +2324,42 @@ static int scarlett2_add_msd_ctl(struct usb_mixer_interface *mixer)
 }
 
 /*** Speaker Switching Control ***/
+static int scarlett2_update_speaker_switch_enum_ctl(struct usb_mixer_interface *mixer)
+{
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
+	u8 speaker_switch;
+	int err = 0;
+	
+	private->speaker_updated = 0;
+	if (!info->has_speaker_switching)
+		return 0;
+
+	/* check if speaker switching is enabled */
+	err = scarlett2_usb_get_config(
+		mixer,
+		SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH,
+		1, &speaker_switch);
+	if (err < 0)
+		return err;
+	
+	/* not enabled */
+	if (!speaker_switch) {
+		private->speaker_switch = 0;
+
+		/* is enabled; check if main or alt speakers are selected */
+	} else {
+		err = scarlett2_usb_get_config(
+			mixer,
+			SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH,
+			1, &speaker_switch);
+		if (err < 0)
+			return err;
+		private->speaker_switch = !!speaker_switch + 1;
+	}
+	
+	return 0;
+}
 
 static int scarlett2_speaker_switch_enum_ctl_info(
 	struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo)
@@ -2337,7 +2375,14 @@ static int scarlett2_speaker_switch_enum_ctl_get(
 	struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
 {
 	struct usb_mixer_elem_info *elem = kctl->private_data;
-	struct scarlett2_mixer_data *private = elem->head.mixer->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	
+	if (private->speaker_updated) {
+		mutex_lock(&private->data_mutex);
+		scarlett2_update_speaker_switch_enum_ctl(mixer);
+		mutex_unlock(&private->data_mutex);
+	}
 
 	ucontrol->value.enumerated.item[0] =
 		private->speaker_switch;
@@ -2402,7 +2447,7 @@ static int scarlett2_add_speaker_switch_ctl(
 
 	return scarlett2_add_new_ctl(
 		mixer, &scarlett2_speaker_switch_enum_ctl,
-		0, 1, "Speaker Switching", NULL);
+		0, 1, "Speaker Switching", &private->speaker_ctl);
 }
 
 /*** Cleanup/Suspend Callbacks ***/
@@ -2728,6 +2773,18 @@ static void scarlett2_mixer_interrupt_button_change(
 			       &private->button_ctls[i]->id);
 }
 
+/* Notify on speaker change */
+static void scarlett2_mixer_interrupt_speaker_change(
+	struct usb_mixer_interface *mixer)
+{
+	struct scarlett2_mixer_data *private = mixer->private_data;
+
+	private->speaker_updated = 1;
+
+	snd_ctl_notify(mixer->chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
+		       &private->speaker_ctl->id);
+}
+
 /* Interrupt callback */
 static void scarlett2_mixer_interrupt(struct urb *urb)
 {
@@ -2744,8 +2801,10 @@ static void scarlett2_mixer_interrupt(struct urb *urb)
 			scarlett2_mixer_interrupt_vol_change(mixer);
 		if (data & SCARLETT2_USB_INTERRUPT_PAD_CHANGE)
 			scarlett2_mixer_interrupt_pad_change(mixer);
-		if (data & (SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE | SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE))
+		if (data & SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE)
 			scarlett2_mixer_interrupt_button_change(mixer);
+		if (data & SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE)
+			scarlett2_mixer_interrupt_speaker_change(mixer);
 	} else {
 		usb_audio_err(mixer->chip,
 			      "scarlett mixer interrupt length %d\n", len);
