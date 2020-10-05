@@ -908,7 +908,7 @@ static const struct scarlett2_config
 	{
 		.offset = 0x9c,
 		.size = 1,
-		.activate = 6
+		.activate = 8
 	},
 
 	/* MSD Mode */
@@ -1881,14 +1881,10 @@ static int scarlett2_48v_ctl_get(struct snd_kcontrol *kctl,
 	struct usb_mixer_interface *mixer = elem->head.mixer;
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	
-	usb_audio_info(elem->head.mixer->chip, "scarlett2_48v_ctl_get index=%d\n", (int)elem->control);
-	
 	if (private->line_ctl_updated) {
-		usb_audio_info(mixer->chip, "mutex_lock(data)\n");
 		mutex_lock(&private->data_mutex);
 		scarlett2_update_line_ctl_switches(mixer);
 		mutex_unlock(&private->data_mutex);
-		usb_audio_info(mixer->chip, "mutex_unlock(data)\n");
 	}
 
 	ucontrol->value.enumerated.item[0] =
@@ -1896,12 +1892,44 @@ static int scarlett2_48v_ctl_get(struct snd_kcontrol *kctl,
 	return 0;
 }
 
+static int scarlett2_48v_ctl_put(struct snd_kcontrol *kctl,
+				 struct snd_ctl_elem_value *ucontrol)
+{
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
+
+	int index = elem->control;
+	int i, oval, val, err = 0;
+
+	mutex_lock(&private->data_mutex);
+
+	oval = private->pow_switch[index];
+	val = !!ucontrol->value.integer.value[0];
+
+	if (oval == val)
+		goto unlock;
+
+	private->pow_switch[index] = val;
+	val = 0;
+	for (i = 0; i < info->power_48v_count; ++i)
+		val |= (private->pow_switch[i] << i);
+
+	/* Send switch change to the device */
+	err = scarlett2_usb_set_config(mixer, SCARLETT2_CONFIG_48V_SWITCH, 0, val);
+
+unlock:
+	mutex_unlock(&private->data_mutex);
+	return err;
+}
+
 static const struct snd_kcontrol_new scarlett2_48v_ctl = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-	.access = SNDRV_CTL_ELEM_ACCESS_READ | SNDRV_CTL_ELEM_ACCESS_VOLATILE,
 	.name = "",
 	.info = snd_ctl_boolean_mono_info,
-	.get  = scarlett2_48v_ctl_get
+	.get  = scarlett2_48v_ctl_get,
+	.put  = scarlett2_48v_ctl_put
 };
 
 /*** Mute/Dim Controls ***/
