@@ -261,7 +261,7 @@ struct scarlett2_mixer_data {
 	int num_mux_srcs;
 	u16 scarlett2_seq;
 	u8 vol_updated; /* Flag that indicates that volume has been updated */
-	u8 pads_updated; /* Flag that indicates that amplification pads have been updated */
+	u8 line_ctl_updated; /* Flag that indicates that state of PAD, INST buttons have been updated */
 	u8 speaker_updated; /* Flag that indicates that speaker/talkback has been updated */
 	u8 master_vol;
 	u8 vol[SCARLETT2_ANALOGUE_MAX];
@@ -276,6 +276,7 @@ struct scarlett2_mixer_data {
 	struct snd_kcontrol *speaker_ctl;
 	struct snd_kcontrol *vol_ctls[SCARLETT2_ANALOGUE_MAX];
 	struct snd_kcontrol *pad_ctls[SCARLETT2_PAD_SWITCH_MAX];
+	struct snd_kcontrol *level_ctls[SCARLETT2_LEVEL_SWITCH_MAX];
 	struct snd_kcontrol *button_ctls[SCARLETT2_BUTTON_MAX];
 	u8 mux[SCARLETT2_MUX_MAX];
 	u8 mix[SCARLETT2_INPUT_MIX_MAX * SCARLETT2_OUTPUT_MIX_MAX];
@@ -762,7 +763,7 @@ static int scarlett2_get_port_start_num(const struct scarlett2_ports *ports,
 #define SCARLETT2_USB_INTERRUPT_SYNC_CHANGE 0x00000008
 #define SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE 0x00200000
 #define SCARLETT2_USB_INTERRUPT_VOL_CHANGE 0x00400000
-#define SCARLETT2_USB_INTERRUPT_PAD_CHANGE 0x00800000
+#define SCARLETT2_USB_INTERRUPT_LINE_CTL_CHANGE 0x00800000
 #define SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE 0x01000000
 
 /* Commands for sending/receiving requests/responses */
@@ -1621,6 +1622,47 @@ static const struct snd_kcontrol_new scarlett2_sw_hw_enum_ctl = {
 };
 
 /*** Line Level/Instrument Level Switch Controls ***/
+static int scarlett2_update_line_ctl_switches(struct usb_mixer_interface *mixer)
+{
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
+	u8 pad_switches[SCARLETT2_PAD_SWITCH_MAX];
+	u8 level_switches[SCARLETT2_LEVEL_SWITCH_MAX];
+	
+	int i, err = 0;
+	
+	private->line_ctl_updated = 0;
+	
+	/* Update pad settings */
+	if (info->pad_input_count) {
+		err = scarlett2_usb_get_config(
+			mixer,
+			SCARLETT2_CONFIG_PAD_SWITCH,
+			info->pad_input_count,
+			pad_switches);
+		if (err < 0)
+			return err;
+		
+		for (i = 0; i < info->pad_input_count; i++)
+			private->pad_switch[i] = !!pad_switches[i];
+	}
+	
+	/* Update level settings */
+	if (info->level_input_count) {
+		err = scarlett2_usb_get_config(
+			mixer,
+			SCARLETT2_CONFIG_LEVEL_SWITCH,
+			info->level_input_count,
+			level_switches);
+		if (err < 0)
+			return err;
+		
+		for (i = 0; i < info->level_input_count; i++)
+			private->level_switch[i] = !!level_switches[i];
+	}
+
+	return 0;
+}
 
 static int scarlett2_level_enum_ctl_info(struct snd_kcontrol *kctl,
 					 struct snd_ctl_elem_info *uinfo)
@@ -1636,7 +1678,14 @@ static int scarlett2_level_enum_ctl_get(struct snd_kcontrol *kctl,
 					struct snd_ctl_elem_value *ucontrol)
 {
 	struct usb_mixer_elem_info *elem = kctl->private_data;
-	struct scarlett2_mixer_data *private = elem->head.mixer->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	
+	if (private->line_ctl_updated) {
+		mutex_lock(&private->data_mutex);
+		scarlett2_update_line_ctl_switches(mixer);
+		mutex_unlock(&private->data_mutex);
+	}
 
 	ucontrol->value.enumerated.item[0] =
 		private->level_switch[elem->control];
@@ -1681,32 +1730,6 @@ static const struct snd_kcontrol_new scarlett2_level_enum_ctl = {
 };
 
 /*** Pad Switch Controls ***/
-static int scarlett2_update_pads(struct usb_mixer_interface *mixer)
-{
-	struct scarlett2_mixer_data *private = mixer->private_data;
-	const struct scarlett2_device_info *info = private->info;
-	u8 pad_switches[SCARLETT2_PAD_SWITCH_MAX];
-	int i, err = 0;
-
-	if (!info->pad_input_count)
-		return 0;
-
-	private->pads_updated = 0;
-
-	err = scarlett2_usb_get_config(
-		mixer,
-		SCARLETT2_CONFIG_PAD_SWITCH,
-		info->pad_input_count,
-		pad_switches);
-	if (err < 0)
-		return err;
-
-	for (i = 0; i < info->pad_input_count; i++)
-		private->pad_switch[i] = pad_switches[i];
-
-	return 0;
-}
-
 static int scarlett2_pad_ctl_get(struct snd_kcontrol *kctl,
 				 struct snd_ctl_elem_value *ucontrol)
 {
@@ -1714,9 +1737,9 @@ static int scarlett2_pad_ctl_get(struct snd_kcontrol *kctl,
 	struct usb_mixer_interface *mixer = elem->head.mixer;
 	struct scarlett2_mixer_data *private = mixer->private_data;
 
-	if (private->pads_updated) {
+	if (private->line_ctl_updated) {
 		mutex_lock(&private->data_mutex);
-		scarlett2_update_pads(mixer);
+		scarlett2_update_line_ctl_switches(mixer);
 		mutex_unlock(&private->data_mutex);
 	}
 
@@ -1740,8 +1763,6 @@ static int scarlett2_pad_ctl_put(struct snd_kcontrol *kctl,
 	oval = private->pad_switch[index];
 	val = !!ucontrol->value.integer.value[0];
 
-	usb_audio_info(mixer->chip, "index=%d, val=%d, oval=%d\n", index, val, oval);
-
 	if (oval == val)
 		goto unlock;
 
@@ -1763,28 +1784,6 @@ static const struct snd_kcontrol_new scarlett2_pad_ctl = {
 	.get  = scarlett2_pad_ctl_get,
 	.put  = scarlett2_pad_ctl_put,
 };
-
-static int scarlett2_add_pad_ctls(struct usb_mixer_interface *mixer)
-{
-	struct scarlett2_mixer_data *private = mixer->private_data;
-	const struct scarlett2_device_info *info = private->info;
-	char s[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
-	int i, err;
-	
-	if (!info->pad_input_count)
-		return 0;
-
-	/* Add Pad control */
-	for (i=0; i<info->pad_input_count; ++i) {
-		snprintf(s, sizeof(s), "Pad %d", i);
-		err = scarlett2_add_new_ctl(mixer, &scarlett2_pad_ctl,
-					    i, 1, s, &private->pad_ctls[i]);
-		if (err < 0)
-			return err;
-	}
-
-	return 0;
-}
 
 /*** Air Switch Controls ***/
 
@@ -1973,25 +1972,25 @@ static int scarlett2_add_line_in_ctls(struct usb_mixer_interface *mixer)
 
 	/* Add input level (line/inst) controls */
 	for (i = 0; i < info->level_input_count; i++) {
-		snprintf(s, sizeof(s), "Line In %d Level Capture Enum", i + 1);
+		snprintf(s, sizeof(s), "Line In %d Mode Switch", i + 1);
 		err = scarlett2_add_new_ctl(mixer, &scarlett2_level_enum_ctl,
-					    i, 1, s, NULL);
+					    i, 1, s, &private->level_ctls[i]);
 		if (err < 0)
 			return err;
 	}
 
 	/* Add input pad controls */
 	for (i = 0; i < info->pad_input_count; i++) {
-		snprintf(s, sizeof(s), "Line In %d Pad Capture Switch", i + 1);
+		snprintf(s, sizeof(s), "Line In %d Pad Switch", i + 1);
 		err = scarlett2_add_new_ctl(mixer, &scarlett2_pad_ctl,
-					    i, 1, s, NULL);
+					    i, 1, s, &private->pad_ctls[i]);
 		if (err < 0)
 			return err;
 	}
 
 	/* Add input air controls */
 	for (i = 0; i < info->air_input_count; i++) {
-		snprintf(s, sizeof(s), "Line In %d Air Capture Switch", i + 1);
+		snprintf(s, sizeof(s), "Line In %d Air Switch", i + 1);
 		err = scarlett2_add_new_ctl(mixer, &scarlett2_air_ctl,
 					    i, 1, s, NULL);
 		if (err < 0)
@@ -2587,7 +2586,7 @@ static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 	private->scarlett2_seq = 0;
 	private->mixer = mixer;
 	private->vol_updated = 0;
-	private->pads_updated = 0;
+	private->line_ctl_updated = 0;
 	err = scarlett2_find_fc_interface(mixer->chip->dev, private);
 
 	if (err < 0)
@@ -2740,22 +2739,32 @@ static void scarlett2_mixer_interrupt_vol_change(
 	}
 }
 
-/* Notify on pad change */
-static void scarlett2_mixer_interrupt_pad_change(
+/* Notify on PAD/INST button state change */
+static void scarlett2_mixer_interrupt_line_in_ctl_change(
 	struct usb_mixer_interface *mixer)
 {
 	struct scarlett2_mixer_data *private = mixer->private_data;
-	int num_pads = private->info->pad_input_count;
+	const struct scarlett2_device_info *info = private->info;
 	int i;
 
-	if (!num_pads)
-		return;
-	
-	private->pads_updated = 1;
+	/* Trigger all PAD inputs for changes */
+	if (info->pad_input_count) {
+		private->line_ctl_updated = 1;
 
-	for (i = 0; i < num_pads; i++) {
-		snd_ctl_notify(mixer->chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
-			       &private->pad_ctls[i]->id);
+		for (i = 0; i < info->pad_input_count; i++) {
+			snd_ctl_notify(mixer->chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
+				       &private->pad_ctls[i]->id);
+		}
+	}
+	
+	/* Trigger all INST inputs for changes */
+	if (info->level_input_count) {
+		private->line_ctl_updated = 1;
+
+		for (i = 0; i < info->level_input_count; i++) {
+			snd_ctl_notify(mixer->chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
+				       &private->level_ctls[i]->id);
+		}
 	}
 }
 
@@ -2799,8 +2808,8 @@ static void scarlett2_mixer_interrupt(struct urb *urb)
 		u32 data = le32_to_cpu(*(u32 *)urb->transfer_buffer);
 		if (data & SCARLETT2_USB_INTERRUPT_VOL_CHANGE)
 			scarlett2_mixer_interrupt_vol_change(mixer);
-		if (data & SCARLETT2_USB_INTERRUPT_PAD_CHANGE)
-			scarlett2_mixer_interrupt_pad_change(mixer);
+		if (data & SCARLETT2_USB_INTERRUPT_LINE_CTL_CHANGE)
+			scarlett2_mixer_interrupt_line_in_ctl_change(mixer);
 		if (data & SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE)
 			scarlett2_mixer_interrupt_button_change(mixer);
 		if (data & SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE)
@@ -2918,11 +2927,6 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer)
 
 	/* Create the analogue output controls */
 	err = scarlett2_add_line_out_ctls(mixer);
-	if (err < 0)
-		return err;
-
-	/* Create the channel pad controls */
-	err = scarlett2_add_pad_ctls(mixer);
 	if (err < 0)
 		return err;
 
