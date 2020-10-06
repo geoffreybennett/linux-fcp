@@ -246,7 +246,7 @@ struct scarlett2_device_info {
 	u8 power_48v_count; /* 48V phantom power */
 	u8 has_msd_mode; /* Gen 3 devices have an internal MSD mode switch */
 	u8 has_speaker_switching; /* main/alt speaker switching */
-	u8 has_talkback; /* 18i20 has Gen 3 has 'talkback' feature */
+	u8 has_talkback; /* 18i20 Gen 3 has 'talkback' feature */
 	const char * const line_out_descrs[SCARLETT2_ANALOGUE_MAX];
 	struct scarlett2_ports ports[SCARLETT2_PORT_TYPE_COUNT];
 };
