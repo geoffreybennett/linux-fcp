@@ -4,7 +4,7 @@
  *   Gen 3 Driver for ALSA
  *
  *   Copyright (c) 2018-2020 by Geoffrey D. Bennett <g at b4.vu>
- *   Copyright (c) 2018-2020 by Vladimir Sadovnikov <sadko4u at gmail.com>
+ *   Copyright (c) 2020 by Vladimir Sadovnikov <sadko4u at gmail.com>
  *
  *   Based on the Scarlett (Gen 1) Driver for ALSA:
  *
@@ -285,8 +285,10 @@ struct scarlett2_mixer_data {
 	struct snd_kcontrol *level_ctls[SCARLETT2_LEVEL_SWITCH_MAX];
 	struct snd_kcontrol *pow_ctls[SCARLETT2_48V_SWITCH_MAX];
 	struct snd_kcontrol *button_ctls[SCARLETT2_BUTTON_MAX];
+	struct snd_kcontrol *mix_talkback_ctls[SCARLETT2_OUTPUT_MIX_MAX]; /* Talkback controls for each mix */
 	u8 mux[SCARLETT2_MUX_MAX];
-	u8 mix[SCARLETT2_INPUT_MIX_MAX * SCARLETT2_OUTPUT_MIX_MAX];
+	u8 mix[SCARLETT2_INPUT_MIX_MAX * SCARLETT2_OUTPUT_MIX_MAX];       /* Matrix mixer */
+	u8 mix_talkback[SCARLETT2_OUTPUT_MIX_MAX];                        /* Talkback enable for mixer output */
 };
 
 /*** Model-specific data ***/
@@ -795,13 +797,13 @@ static int scarlett2_get_port_start_num(const struct scarlett2_ports *ports,
 
 #define SCARLETT2_USB_INIT_1 0x00000000
 #define SCARLETT2_USB_INIT_2 0x00000002
+#define SCARLETT2_USB_CONFIG_SAVE 0x00000006
 #define SCARLETT2_USB_GET_METER_LEVELS 0x00001001
 #define SCARLETT2_USB_SET_MIX 0x00002002
 #define SCARLETT2_USB_SET_MUX 0x00003002
 #define SCARLETT2_USB_GET_DATA 0x00800000
 #define SCARLETT2_USB_SET_DATA 0x00800001
 #define SCARLETT2_USB_DATA_CMD 0x00800002
-#define SCARLETT2_USB_CONFIG_SAVE 6
 
 #define SCARLETT2_USB_VOLUME_STATUS_OFFSET 0x31
 #define SCARLETT2_USB_METER_LEVELS_GET_MAGIC 1
@@ -846,7 +848,8 @@ enum {
 	SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH = 10,
 	SCARLETT2_CONFIG_GAIN_HALO_1 = 11,
 	SCARLETT2_CONFIG_GAIN_HALO_2 = 12,
-	SCARLETT2_CONFIG_COUNT = 13
+	SCARLETT2_CONFIG_MIX_TALKBACK = 13,
+	SCARLETT2_CONFIG_COUNT = 14
 };
 
 /* Location, size, and activation command number for the configuration
@@ -949,6 +952,13 @@ static const struct scarlett2_config
 		.offset = 0xa8,
 		.size = 1,
 		.activate = 11
+	},
+	
+	/* Talkback enable flags for each output of internal mixer */
+	{
+		.offset = 0xb0,
+		.size = 2,
+		.activate = 10
 	}
 };
 
@@ -2507,6 +2517,18 @@ static int scarlett2_talkback_switch_ctl_get(
 	return 0;
 }
 
+static int scarlett2_mix_talkback_switch_ctl_get(
+	struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	
+	ucontrol->value.enumerated.item[0] =
+		private->mix_talkback[elem->control];
+	return 0;
+}
+
 static int scarlett2_speaker_switch_update_state(struct usb_mixer_interface *mixer, int alt, int talkback) {
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	const struct scarlett2_device_info *info = private->info;
@@ -2570,6 +2592,39 @@ static int scarlett2_talkback_switch_ctl_put(
 						     ucontrol->value.integer.value[0]);
 }
 
+static int scarlett2_mix_talkback_switch_ctl_put(
+	struct snd_kcontrol *kctl, struct snd_ctl_elem_value *ucontrol)
+{
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_ports *ports = private->info->ports;
+	int i, val, old_val, num_mixes, err = 0;
+
+	mutex_lock(&private->data_mutex);
+
+	old_val  = private->mix_talkback[elem->control];
+	val      = !! ucontrol->value.integer.value[0];
+	if (old_val == val)
+		goto unlock;
+
+	private->mix_talkback[elem->control] = val;
+
+	/* Build bit mask for each mixer channel and commit to device */
+	val      = 0;
+	num_mixes = ports[SCARLETT2_PORT_TYPE_MIX].num[SCARLETT2_PORT_IN];
+	for (i=0; i<num_mixes; ++i)
+		val |= (private->mix_talkback[i]) << i;
+
+	err = scarlett2_usb_set_config(
+		mixer, SCARLETT2_CONFIG_MIX_TALKBACK,
+		0, val);
+
+unlock:
+	mutex_unlock(&private->data_mutex);
+	return err;
+}
+
 static const struct snd_kcontrol_new scarlett2_speaker_switch_enum_ctl = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "",
@@ -2586,12 +2641,22 @@ static const struct snd_kcontrol_new scarlett2_talkback_switch_ctl = {
 	.put  = scarlett2_talkback_switch_ctl_put,
 };
 
+static const struct snd_kcontrol_new scarlett2_mix_talkback_switch_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "",
+	.info = snd_ctl_boolean_mono_info,
+	.get  = scarlett2_mix_talkback_switch_ctl_get,
+	.put  = scarlett2_mix_talkback_switch_ctl_put,
+};
+
 static int scarlett2_add_speaker_switch_ctl(
 	struct usb_mixer_interface *mixer)
 {
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	const struct scarlett2_device_info *info = private->info;
-	int err = 0;
+	const struct scarlett2_ports *ports = private->info->ports;
+	char s[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
+	int err = 0, num_mixes, i;
 
 	if (info->has_speaker_switching) {
 		/* Add speaker switching control */
@@ -2602,7 +2667,7 @@ static int scarlett2_add_speaker_switch_ctl(
 		if (err < 0)
 			return err;
 	}
-	
+
 	if (info->has_talkback) {
 		/* Add talkback switching control */
 		err = scarlett2_add_new_ctl(
@@ -2611,8 +2676,21 @@ static int scarlett2_add_speaker_switch_ctl(
 		
 		if (err < 0)
 			return err;
+
+		/* Add 'talkback enable' for mix */
+		num_mixes = ports[SCARLETT2_PORT_TYPE_MIX].num[SCARLETT2_PORT_IN];
+		for (i=0; i<num_mixes; ++i) {
+			snprintf(s, sizeof(s), "Mix %c Talkback", 'A' + i);
+			
+			err = scarlett2_add_new_ctl(
+				mixer, &scarlett2_mix_talkback_switch_ctl,
+				i, 1, s, &private->mix_talkback_ctls[i]);
+		
+			if (err < 0)
+				return err;
+		}
 	}
-	
+
 	return 0;
 }
 
@@ -2780,8 +2858,9 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 	u8 msd_switch;
 	u8 speaker_switching, speaker_switch;
 	u8 pow_switch;
+	__le16 mix_talkbacks;
 	struct scarlett2_usb_volume_status volume_status;
-	int err, i;
+	int err, i, num_mixes, val;
 
 	/* INST buttons */
 	if (info->level_input_count) {
@@ -2869,6 +2948,22 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 		private->speaker_switch  = (speaker_switching) ? (speaker_switch & 1) + 1 : 0;
 		if (info->has_talkback)
 			private->talkback_switch = !!(speaker_switch & 2);
+	}
+
+	/* Talkback routing to each output of internal mixer */
+	if (info->has_talkback) {
+		err = scarlett2_usb_get_config(
+			mixer,
+			SCARLETT2_CONFIG_MIX_TALKBACK,
+			1, &mix_talkbacks);
+		if (err < 0)
+			return err;
+		
+		/* Each talkback switch is just a bit assigned to the corresponding mixer output */
+		val = le16_to_cpu(mix_talkbacks);
+		num_mixes = ports[SCARLETT2_PORT_TYPE_MIX].num[SCARLETT2_PORT_IN];
+		for (i=0; i<num_mixes; ++i)
+			private->mix_talkback[i] = !!(val & (1 << i));
 	}
 
 	err = scarlett2_usb_get_volume_status(mixer, &volume_status);
