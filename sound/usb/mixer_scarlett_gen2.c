@@ -3253,14 +3253,10 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer)
 	if (err < 0)
 		return err;
 
-	/* Set up the interrupt polling if there is a hardware volume
-	 * control
-	 */
-	if (info->line_out_hw_vol) {
-		err = scarlett2_mixer_status_create(mixer);
-		if (err < 0)
-			return err;
-	}
+	/* Set up the interrupt polling */
+	err = scarlett2_mixer_status_create(mixer);
+	if (err < 0)
+		return err;
 
 	return 0;
 }
