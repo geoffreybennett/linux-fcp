@@ -236,13 +236,25 @@ static const u16 scarlett2_sw_config_mixer_values[173] = {
  * - PCM I/O
  */
 enum {
-	SCARLETT2_PORT_TYPE_NONE = 0,
-	SCARLETT2_PORT_TYPE_ANALOGUE = 1,
-	SCARLETT2_PORT_TYPE_SPDIF = 2,
-	SCARLETT2_PORT_TYPE_ADAT = 3,
-	SCARLETT2_PORT_TYPE_MIX = 4,
-	SCARLETT2_PORT_TYPE_PCM = 5,
-	SCARLETT2_PORT_TYPE_COUNT = 6,
+	SCARLETT2_PORT_TYPE_ANALOGUE = 0,       /* Analogue input/output */
+	SCARLETT2_PORT_TYPE_SPDIF = 1,          /* S/PDIF input/oputput  */
+	SCARLETT2_PORT_TYPE_ADAT = 2,           /* ADAT input/output     */
+	SCARLETT2_PORT_TYPE_MIX = 3,            /* Mixer input/output    */
+	SCARLETT2_PORT_TYPE_PCM = 4,            /* PCM input/output      */
+	SCARLETT2_PORT_TYPE_INT_MIC = 5,        /* Internal microphone   */
+	SCARLETT2_PORT_TYPE_TALKBACK = 6,       /* Talkback source       */
+	SCARLETT2_PORT_TYPE_COUNT = 7
+};
+
+enum {
+	SCARLETT2_PORT_ID_NONE = 0,
+	SCARLETT2_PORT_ID_ANALOGUE = 0x80,
+	SCARLETT2_PORT_ID_SPDIF = 0x180,
+	SCARLETT2_PORT_ID_ADAT = 0x200,
+	SCARLETT2_PORT_ID_MIX = 0x300,
+	SCARLETT2_PORT_ID_PCM = 0x600,
+	SCARLETT2_PORT_ID_MASK  = 0x0f80,
+	SCARLETT2_PORT_NUM_MASK = 0x007f
 };
 
 /* Count of total I/O and number available at each sample rate */
@@ -262,6 +274,13 @@ static const char *const scarlett2_button_names[SCARLETT2_BUTTON_MAX] = {
 	"Mute", "Dim"
 };
 
+struct scarlett2_port_name {
+	s8 direction;  /* Direction of port */
+	s8 type;  /* Type of port - SCARLETT2_PORT_TYPE_* */
+	s8 index; /* Index of port */
+	const char *name; /* The name of port */
+};
+
 /* Description of each hardware port type:
  * - id: hardware ID for this port type
  * - num: number of sources/destinations of this port type
@@ -278,6 +297,7 @@ struct scarlett2_ports {
 };
 
 struct scarlett2_device_info {
+	u32 usb_id; /* USB device identifier */
 	u8 line_out_hw_vol; /* line out hw volume is sw controlled */
 	u8 button_count; /* number of buttons */
 	u8 level_input_count; /* inputs with level selectable */
@@ -288,6 +308,8 @@ struct scarlett2_device_info {
 	u8 has_speaker_switching; /* main/alt speaker switching */
 	u8 has_talkback; /* 18i20 Gen 3 has 'talkback' feature */
 	const char * const line_out_descrs[SCARLETT2_ANALOGUE_MAX];
+	const struct scarlett2_port_name * const port_names; /* Special names of ports */
+	const u8 mux_size[SCARLETT2_PORT_DIRECTIONS]; /* The maximum number of elements per mux */
 	struct scarlett2_ports ports[SCARLETT2_PORT_TYPE_COUNT];
 };
 
@@ -307,7 +329,8 @@ struct scarlett2_mixer_data {
 	__u8 endpoint; /* interrupt endpoint address */
 	__le16 maxpacketsize;
 	__u8 interval;
-	int num_mux_srcs;
+	int num_inputs; /* Overall number of inputs */
+	int num_outputs; /* Overall number of outputs */
 	u16 scarlett2_seq;
 	u8 vol_updated; /* Flag that indicates that volume has been updated */
 	u8 line_ctl_updated; /* Flag that indicates that state of PAD, INST buttons have been updated */
@@ -332,7 +355,7 @@ struct scarlett2_mixer_data {
 	struct snd_kcontrol *pow_ctls[SCARLETT2_48V_SWITCH_MAX];
 	struct snd_kcontrol *button_ctls[SCARLETT2_BUTTON_MAX];
 	struct snd_kcontrol *mix_talkback_ctls[SCARLETT2_OUTPUT_MIX_MAX]; /* Talkback controls for each mix */
-	u8 mux[SCARLETT2_MUX_MAX];
+	s8 mux[SCARLETT2_MUX_MAX];                                        /* Routing of outputs */
 	u8 mix[SCARLETT2_INPUT_MIX_MAX * SCARLETT2_OUTPUT_MIX_MAX];       /* Matrix mixer */
 	u8 mix_talkback[SCARLETT2_OUTPUT_MIX_MAX];                        /* Talkback enable for mixer output */
 
@@ -348,8 +371,17 @@ struct scarlett2_mixer_data {
 };
 
 /*** Model-specific data ***/
+static const struct scarlett2_port_name s6i6_gen2_ports[] = {
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Headphones 1 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Headphones 1 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 2, "Headphones 2 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 3, "Headphones 2 R" },
+	{ -1, -1, -1, NULL }
+};
 
 static const struct scarlett2_device_info s6i6_gen2_info = {
+	.usb_id = USB_ID(0x1235, 0x8203),
+	
 	/* The first two analogue inputs can be switched between line
 	 * and instrument levels.
 	 */
@@ -365,44 +397,55 @@ static const struct scarlett2_device_info s6i6_gen2_info = {
 		"Headphones 2 R",
 	},
 
+	.port_names = s6i6_gen2_ports,
+
+	.mux_size = { 77, 77, 77, 73, 46 },
+
 	.ports = {
-		[SCARLETT2_PORT_TYPE_NONE] = {
-			.id = 0x000,
-			.num = { 1, 0, 8, 8, 8 },
-			.src_descr = "Off",
-		},
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
-			.id = 0x080,
+			.id = SCARLETT2_PORT_ID_ANALOGUE,
 			.num = { 4, 4, 4, 4, 4 },
-			.src_descr = "Analogue %d",
+			.src_descr = "Analogue In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "Analogue Output %02d Playback"
+			.dst_descr = "Analogue Out %02d"
 		},
 		[SCARLETT2_PORT_TYPE_SPDIF] = {
-			.id = 0x180,
+			.id = SCARLETT2_PORT_ID_SPDIF,
 			.num = { 2, 2, 2, 2, 2 },
-			.src_descr = "S/PDIF %d",
+			.src_descr = "S/PDIF In %d",
 			.src_num_offset = 1,
-			.dst_descr = "S/PDIF Output %d Playback"
+			.dst_descr = "S/PDIF Out %d"
 		},
 		[SCARLETT2_PORT_TYPE_MIX] = {
-			.id = 0x300,
+			.id = SCARLETT2_PORT_ID_MIX,
 			.num = { 10, 18, 18, 18, 18 },
-			.src_descr = "Mix %c",
-			.src_num_offset = 65,
-			.dst_descr = "Mixer Input %02d Capture"
+			.src_descr = "Mix %c Out",
+			.src_num_offset = 'A',
+			.dst_descr = "Mix In %02d"
 		},
 		[SCARLETT2_PORT_TYPE_PCM] = {
-			.id = 0x600,
+			.id = SCARLETT2_PORT_ID_PCM,
 			.num = { 6, 6, 6, 6, 6 },
-			.src_descr = "PCM %d",
+			.src_descr = "PCM In %d",
 			.src_num_offset = 1,
-			.dst_descr = "PCM %02d Capture"
+			.dst_descr = "PCM Out %02d"
 		},
 	},
 };
 
+static const struct scarlett2_port_name s18i8_gen2_port_names[] = {
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Monitor L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Monitor R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 2, "Headphones 1 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 3, "Headphones 1 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 4, "Headphones 2 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 5, "Headphones 2 R" },
+	{ -1, -1, -1, NULL }
+};
+
 static const struct scarlett2_device_info s18i8_gen2_info = {
+	.usb_id = USB_ID(0x1235, 0x8204),
+
 	/* The first two analogue inputs can be switched between line
 	 * and instrument levels.
 	 */
@@ -420,50 +463,62 @@ static const struct scarlett2_device_info s18i8_gen2_info = {
 		"Headphones 2 R",
 	},
 
+	.port_names = s18i8_gen2_port_names,
+
+	.mux_size = { 77, 77, 77, 73, 46 },
+
 	.ports = {
-		[SCARLETT2_PORT_TYPE_NONE] = {
-			.id = 0x000,
-			.num = { 1, 0, 8, 8, 4 },
-			.src_descr = "Off",
-		},
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
-			.id = 0x080,
+			.id = SCARLETT2_PORT_ID_ANALOGUE,
 			.num = { 8, 6, 6, 6, 6 },
-			.src_descr = "Analogue %d",
+			.src_descr = "Analogue In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "Analogue Output %02d Playback"
+			.dst_descr = "Analogue Out %02d"
 		},
 		[SCARLETT2_PORT_TYPE_SPDIF] = {
-			.id = 0x180,
+			.id = SCARLETT2_PORT_ID_SPDIF,
 			.num = { 2, 2, 2, 2, 2 },
-			.src_descr = "S/PDIF %d",
+			.src_descr = "S/PDIF In %d",
 			.src_num_offset = 1,
-			.dst_descr = "S/PDIF Output %d Playback"
+			.dst_descr = "S/PDIF Out %d"
 		},
 		[SCARLETT2_PORT_TYPE_ADAT] = {
-			.id = 0x200,
+			.id = SCARLETT2_PORT_ID_ADAT,
 			.num = { 8, 0, 0, 0, 0 },
-			.src_descr = "ADAT %d",
+			.src_descr = "ADAT In %d",
 			.src_num_offset = 1,
+			.dst_descr = "ADAT Out %d",
 		},
 		[SCARLETT2_PORT_TYPE_MIX] = {
-			.id = 0x300,
+			.id = SCARLETT2_PORT_ID_MIX,
 			.num = { 10, 18, 18, 18, 18 },
-			.src_descr = "Mix %c",
-			.src_num_offset = 65,
-			.dst_descr = "Mixer Input %02d Capture"
+			.src_descr = "Mix %c Out",
+			.src_num_offset = 'A',
+			.dst_descr = "Mix In %02d"
 		},
 		[SCARLETT2_PORT_TYPE_PCM] = {
-			.id = 0x600,
+			.id = SCARLETT2_PORT_ID_PCM,
 			.num = { 8, 18, 18, 14, 10 },
-			.src_descr = "PCM %d",
+			.src_descr = "PCM In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "PCM %02d Capture"
+			.dst_descr = "PCM Out %02d"
 		},
 	},
 };
 
+static const struct scarlett2_port_name s18i20_gen2_port_names[] = {
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Monitor L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Monitor R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 6, "Headphones 1 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 7, "Headphones 1 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 8, "Headphones 2 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 9, "Headphones 2 R" },
+	{ -1, -1, -1, NULL }
+};
+
 static const struct scarlett2_device_info s18i20_gen2_info = {
+	.usb_id = USB_ID(0x1235, 0x8201),
+
 	/* The analogue line outputs on the 18i20 can be switched
 	 * between software and hardware volume control
 	 */
@@ -485,55 +540,64 @@ static const struct scarlett2_device_info s18i20_gen2_info = {
 		"Headphones 2 R",
 	},
 
+	.port_names = s18i8_gen2_port_names,
+
+	.mux_size = { 77, 77, 77, 73, 46 },
+
 	.ports = {
-		[SCARLETT2_PORT_TYPE_NONE] = {
-			.id = 0x000,
-			.num = { 1, 0, 8, 8, 6 },
-			.src_descr = "Off",
-		},
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
-			.id = 0x080,
+			.id = SCARLETT2_PORT_ID_ANALOGUE,
 			.num = { 8, 10, 10, 10, 10 },
-			.src_descr = "Analogue %d",
+			.src_descr = "Analogue In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "Analogue Output %02d Playback"
+			.dst_descr = "Analogue Out %02d"
 		},
 		[SCARLETT2_PORT_TYPE_SPDIF] = {
 			/* S/PDIF outputs aren't available at 192KHz
 			 * but are included in the USB mux I/O
 			 * assignment message anyway
 			 */
-			.id = 0x180,
+			.id = SCARLETT2_PORT_ID_SPDIF,
 			.num = { 2, 2, 2, 2, 2 },
-			.src_descr = "S/PDIF %d",
+			.src_descr = "S/PDIF In %d",
 			.src_num_offset = 1,
-			.dst_descr = "S/PDIF Output %d Playback"
+			.dst_descr = "S/PDIF Out %d"
 		},
 		[SCARLETT2_PORT_TYPE_ADAT] = {
-			.id = 0x200,
+			.id = SCARLETT2_PORT_ID_ADAT,
 			.num = { 8, 8, 8, 4, 0 },
-			.src_descr = "ADAT %d",
+			.src_descr = "ADAT In %d",
 			.src_num_offset = 1,
-			.dst_descr = "ADAT Output %d Playback"
+			.dst_descr = "ADAT Out %d"
 		},
 		[SCARLETT2_PORT_TYPE_MIX] = {
-			.id = 0x300,
+			.id = SCARLETT2_PORT_ID_MIX,
 			.num = { 10, 18, 18, 18, 18 },
-			.src_descr = "Mix %c",
-			.src_num_offset = 65,
-			.dst_descr = "Mixer Input %02d Capture"
+			.src_descr = "Mix %c Out",
+			.src_num_offset = 'A',
+			.dst_descr = "Mix In %02d"
 		},
 		[SCARLETT2_PORT_TYPE_PCM] = {
-			.id = 0x600,
+			.id = SCARLETT2_PORT_ID_PCM,
 			.num = { 20, 18, 18, 14, 10 },
-			.src_descr = "PCM %d",
+			.src_descr = "PCM In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "PCM %02d Capture"
+			.dst_descr = "PCM Out %02d"
 		},
 	},
 };
 
+static const struct scarlett2_port_name s4i4_gen3_port_names[] = {
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Monitor L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Monitor R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 2, "Headphones L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 3, "Headphones R" },
+	{ -1, -1, -1, NULL }
+};
+
 static const struct scarlett2_device_info s4i4_gen3_info = {
+	.usb_id = USB_ID(0x1235, 0x8212),
+
 	/* The first two analogue inputs can be switched between line
 	 * and instrument levels.
 	 */
@@ -544,7 +608,7 @@ static const struct scarlett2_device_info s4i4_gen3_info = {
 
 	/* The first two analogue inputs have an optional "air" feature. */
 	.air_input_count = 2,
-
+	
 	/* One 48V phantom power switch */
 	.power_48v_count = 1,
 
@@ -558,37 +622,46 @@ static const struct scarlett2_device_info s4i4_gen3_info = {
 		"Headphones R",
 	},
 
+	.port_names = s4i4_gen3_port_names,
+
+	.mux_size = { 77, 77, 77, 73, 46 },
+
 	.ports = {
-		[SCARLETT2_PORT_TYPE_NONE] = {
-			.id = 0x000,
-			.num = { 1, 0, 16, 16, 16 },
-			.src_descr = "Off",
-		},
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
-			.id = 0x080,
+			.id = SCARLETT2_PORT_ID_ANALOGUE,
 			.num = { 4, 4, 4, 4, 4 },
-			.src_descr = "Analogue %d",
+			.src_descr = "Analogue In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "Analogue Output %02d Playback"
+			.dst_descr = "Analogue Out %02d"
 		},
 		[SCARLETT2_PORT_TYPE_MIX] = {
-			.id = 0x300,
+			.id = SCARLETT2_PORT_ID_MIX,
 			.num = { 6, 8, 8, 8, 8 },
-			.src_descr = "Mix %c",
-			.src_num_offset = 65,
-			.dst_descr = "Mixer Input %02d Capture"
+			.src_descr = "Mix %c Out",
+			.src_num_offset = 'A',
+			.dst_descr = "Mix In %02d"
 		},
 		[SCARLETT2_PORT_TYPE_PCM] = {
-			.id = 0x600,
+			.id = SCARLETT2_PORT_ID_PCM,
 			.num = { 4, 6, 6, 6, 6 },
-			.src_descr = "PCM %d",
+			.src_descr = "PCM In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "PCM %02d Capture"
+			.dst_descr = "PCM Out %02d"
 		},
 	},
 };
 
+static const struct scarlett2_port_name s8i6_gen3_port_names[] = {
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Headphones 1 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Headphones 1 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 2, "Headphones 2 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 3, "Headphones 3 R" },
+	{ -1, -1, -1, NULL }
+};
+
 static const struct scarlett2_device_info s8i6_gen3_info = {
+	.usb_id = USB_ID(0x1235, 0x8213),
+
 	/* The first two analogue inputs can be switched between line
 	 * and instrument levels.
 	 */
@@ -599,7 +672,7 @@ static const struct scarlett2_device_info s8i6_gen3_info = {
 
 	/* The first two analogue inputs have an optional "air" feature. */
 	.air_input_count = 2,
-
+	
 	/* One 48V phantom power switch */
 	.power_48v_count = 1,
 
@@ -613,44 +686,57 @@ static const struct scarlett2_device_info s8i6_gen3_info = {
 		"Headphones 2 R",
 	},
 
+	.port_names = s8i6_gen3_port_names,
+
+	.mux_size = { 77, 77, 77, 73, 46 },
+
 	.ports = {
-		[SCARLETT2_PORT_TYPE_NONE] = {
-			.id = 0x000,
-			.num = { 1, 0, 18, 18, 18 },
-			.src_descr = "Off",
-		},
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
-			.id = 0x080,
+			.id = SCARLETT2_PORT_ID_ANALOGUE,
 			.num = { 6, 4, 4, 4, 4 },
-			.src_descr = "Analogue %d",
+			.src_descr = "Analogue In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "Analogue Output %02d Playback"
+			.dst_descr = "Analogue Out %02d"
 		},
 		[SCARLETT2_PORT_TYPE_SPDIF] = {
-			.id = 0x180,
+			.id = SCARLETT2_PORT_ID_SPDIF,
 			.num = { 2, 2, 2, 2, 2 },
-			.src_descr = "S/PDIF %d",
+			.src_descr = "S/PDIF In %d",
 			.src_num_offset = 1,
-			.dst_descr = "S/PDIF Output %d Playback"
+			.dst_descr = "S/PDIF Out %d"
 		},
 		[SCARLETT2_PORT_TYPE_MIX] = {
-			.id = 0x300,
+			.id = SCARLETT2_PORT_ID_MIX,
 			.num = { 8, 8, 8, 8, 8 },
-			.src_descr = "Mix %c",
-			.src_num_offset = 65,
-			.dst_descr = "Mixer Input %02d Capture"
+			.src_descr = "Mix %c Out",
+			.src_num_offset = 'A',
+			.dst_descr = "Mix In %02d"
 		},
 		[SCARLETT2_PORT_TYPE_PCM] = {
-			.id = 0x600,
+			.id = SCARLETT2_PORT_ID_PCM,
 			.num = { 6, 10, 10, 10, 10 },
-			.src_descr = "PCM %d",
+			.src_descr = "PCM In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "PCM %02d Capture"
+			.dst_descr = "PCM Out %02d"
 		},
 	},
 };
 
+static const struct scarlett2_port_name s18i8_gen3_port_names[] = {
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Monitor 1 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Monitor 1 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 2, "Headphones 1 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 3, "Headphones 1 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 4, "Headphones 2 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 5, "Headphones 2 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 6, "Monitor 2 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 7, "Monitor 2 R" },
+	{ -1, -1, -1, NULL }
+};
+
 static const struct scarlett2_device_info s18i8_gen3_info = {
+	.usb_id = USB_ID(0x1235, 0x8214),
+
 	/* The analogue line outputs on the 18i8 can be switched
 	 * between software and hardware volume control
 	 */
@@ -690,51 +776,66 @@ static const struct scarlett2_device_info s18i8_gen3_info = {
 		"Monitor 2 R",
 	},
 
+	.port_names = s18i8_gen3_port_names,
+
+	.mux_size = { 77, 77, 77, 73, 46 },
+
 	.ports = {
-		[SCARLETT2_PORT_TYPE_NONE] = {
-			.id = 0x000,
-			.num = { 1, 0, 10, 10, 10 },
-			.src_descr = "Off",
-			.src_num_offset = 0,
-		},
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
-			.id = 0x080,
+			.id = SCARLETT2_PORT_ID_ANALOGUE,
 			.num = { 8, 8, 8, 8, 8 },
-			.src_descr = "Analogue %d",
+			.src_descr = "Analogue In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "Analogue Output %02d Playback"
+			.dst_descr = "Analogue Out %02d"
 		},
 		[SCARLETT2_PORT_TYPE_SPDIF] = {
-			.id = 0x180,
+			.id = SCARLETT2_PORT_ID_SPDIF,
 			.num = { 2, 2, 2, 2, 2 },
-			.src_descr = "S/PDIF %d",
+			.src_descr = "S/PDIF In %d",
 			.src_num_offset = 1,
-			.dst_descr = "S/PDIF Output %d Playback"
+			.dst_descr = "S/PDIF Out %d"
 		},
 		[SCARLETT2_PORT_TYPE_ADAT] = {
-			.id = 0x200,
+			.id = SCARLETT2_PORT_ID_ADAT,
 			.num = { 8, 0, 0, 0, 0 },
-			.src_descr = "ADAT %d",
+			.src_descr = "ADAT In %d",
 			.src_num_offset = 1,
+			.dst_descr = "ADAT Out %d"
 		},
 		[SCARLETT2_PORT_TYPE_MIX] = {
-			.id = 0x300,
+			.id = SCARLETT2_PORT_ID_MIX,
 			.num = { 10, 20, 20, 20, 20 },
-			.src_descr = "Mix %c",
-			.src_num_offset = 65,
-			.dst_descr = "Mixer Input %02d Capture"
+			.src_descr = "Mix %c Out",
+			.src_num_offset = 'A',
+			.dst_descr = "Mix In %02d"
 		},
 		[SCARLETT2_PORT_TYPE_PCM] = {
-			.id = 0x600,
+			.id = SCARLETT2_PORT_ID_PCM,
 			.num = { 8, 20, 20, 16, 10 },
-			.src_descr = "PCM %d",
+			.src_descr = "PCM In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "PCM %02d Capture"
+			.dst_descr = "PCM Out %02d"
 		},
+
 	},
 };
 
+static const struct scarlett2_port_name s18i20_gen3_port_names[] = {
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Monitor 1 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Monitor 1 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 2, "Monitor 2 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 3, "Monitor 2 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 6, "Headphones 1 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 7, "Headphones 1 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 8, "Headphones 2 L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 9, "Headphones 2 R" },
+
+	{ -1, -1, -1, NULL }
+};
+
 static const struct scarlett2_device_info s18i20_gen3_info = {
+	.usb_id = USB_ID(0x1235, 0x8215),
+
 	/* The analogue line outputs on the 18i20 can be switched
 	 * between software and hardware volume control
 	 */
@@ -753,7 +854,7 @@ static const struct scarlett2_device_info s18i20_gen3_info = {
 
 	/* The first eight analogue inputs have an optional "air" feature. */
 	.air_input_count = 8,
-
+	
 	/* Two 48V phantom power switches */
 	.power_48v_count = 2,
 
@@ -762,7 +863,7 @@ static const struct scarlett2_device_info s18i20_gen3_info = {
 
 	/* Has a main/alt speaker switch */
 	.has_speaker_switching = 1,
-
+	
 	/* Has a talkback speaker switch */
 	.has_talkback = 1,
 
@@ -779,62 +880,74 @@ static const struct scarlett2_device_info s18i20_gen3_info = {
 		"Headphones 2 R",
 	},
 
+	.port_names = s18i20_gen3_port_names,
+
+	.mux_size = { 77, 77, 77, 73, 46 },
+
 	.ports = {
-		[SCARLETT2_PORT_TYPE_NONE] = {
-			.id = 0x000,
-			.num = { 1, 0, 13, 11, 0 },
-			.src_descr = "Off",
-			.src_num_offset = 0,
-		},
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
-			.id = 0x080,
+			.id = SCARLETT2_PORT_ID_ANALOGUE,
 			.num = { 8, 10, 10, 10, 10 },
-			.src_descr = "Analogue %d",
+			.src_descr = "Analogue In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "Analogue Output %02d Playback"
+			.dst_descr = "Analogue Out %02d"
 		},
 		[SCARLETT2_PORT_TYPE_SPDIF] = {
-			.id = 0x180,
+			.id = SCARLETT2_PORT_ID_SPDIF,
 			.num = { 2, 2, 2, 2, 2 },
-			.src_descr = "S/PDIF %d",
+			.src_descr = "S/PDIF In %d",
 			.src_num_offset = 1,
-			.dst_descr = "S/PDIF Output %d Playback"
+			.dst_descr = "S/PDIF Out %d"
 		},
 		[SCARLETT2_PORT_TYPE_ADAT] = {
-			.id = 0x200,
+			.id = SCARLETT2_PORT_ID_ADAT,
 			.num = { 8, 8, 8, 8, 0 },
-			.src_descr = "ADAT %d",
+			.src_descr = "ADAT In %d",
 			.src_num_offset = 1,
-			.dst_descr = "ADAT Output %d Playback"
+			.dst_descr = "ADAT Out %d"
 		},
 		[SCARLETT2_PORT_TYPE_MIX] = {
-			.id = 0x300,
+			.id = SCARLETT2_PORT_ID_MIX,
 			.num = { 12, 24, 24, 24, 24 },
-			.src_descr = "Mix %c",
-			.src_num_offset = 65,
-			.dst_descr = "Mixer Input %02d Capture"
+			.src_descr = "Mix %c Out",
+			.src_num_offset = 'A',
+			.dst_descr = "Mix In %02d"
 		},
 		[SCARLETT2_PORT_TYPE_PCM] = {
-			.id = 0x600,
+			.id = SCARLETT2_PORT_ID_PCM,
 			.num = { 20, 20, 20, 18, 10 },
-			.src_descr = "PCM %d",
+			.src_descr = "PCM In %02d",
 			.src_num_offset = 1,
-			.dst_descr = "PCM %02d Capture"
+			.dst_descr = "PCM Out %02d"
+		},
+		[SCARLETT2_PORT_TYPE_INT_MIC] = {
+			.id = SCARLETT2_PORT_ID_ANALOGUE + 8,
+			.num = { 1, 0, 0, 0, 0 },
+			.src_descr = "Internal Mic"
+		},
+		[SCARLETT2_PORT_TYPE_TALKBACK] = {
+			.id = SCARLETT2_PORT_ID_MIX + 24,
+			.num = { 0, 1, 1, 1, 1 },
+			.dst_descr = "Talkback"
 		},
 	},
 };
 
-/* get the starting port index number for a given port type/direction */
-static int scarlett2_get_port_start_num(const struct scarlett2_ports *ports,
-					int direction, int port_type)
-{
-	int i, num = 0;
+static const struct scarlett2_device_info *scarlett2_supported_devices[] = {
+	/* Supported Gen2 devices */
+	&s6i6_gen2_info,
+	&s18i8_gen2_info,
+	&s18i20_gen2_info,
 
-	for (i = 0; i < port_type; i++)
-		num += ports[i].num[direction];
+	/* Supported Gen3 devices */
+	&s4i4_gen3_info,
+	&s8i6_gen3_info,
+	&s18i8_gen3_info,
+	&s18i20_gen3_info,
 
-	return num;
-}
+	/* End of list */
+	NULL
+};
 
 /*** USB Interactions ***/
 
@@ -851,15 +964,16 @@ static int scarlett2_get_port_start_num(const struct scarlett2_ports *ports,
 #define SCARLETT2_USB_CMD_REQ 2
 #define SCARLETT2_USB_CMD_RESP 3
 
-#define SCARLETT2_USB_INIT_1 0x00000000
-#define SCARLETT2_USB_INIT_2 0x00000002
-#define SCARLETT2_USB_CONFIG_SAVE 0x00000006
-#define SCARLETT2_USB_GET_METER_LEVELS 0x00001001
-#define SCARLETT2_USB_SET_MIX 0x00002002
-#define SCARLETT2_USB_SET_MUX 0x00003002
-#define SCARLETT2_USB_GET_DATA 0x00800000
-#define SCARLETT2_USB_SET_DATA 0x00800001
-#define SCARLETT2_USB_DATA_CMD 0x00800002
+#define SCARLETT2_USB_INIT_1                     0x00000000
+#define SCARLETT2_USB_INIT_2                     0x00000002
+#define SCARLETT2_USB_CONFIG_SAVE                0x00000006
+#define SCARLETT2_USB_GET_METER_LEVELS           0x00001001
+#define SCARLETT2_USB_SET_MIX                    0x00002002
+#define SCARLETT2_USB_GET_MUX                    0x00003001
+#define SCARLETT2_USB_SET_MUX                    0x00003002
+#define SCARLETT2_USB_GET_DATA                   0x00800000
+#define SCARLETT2_USB_SET_DATA                   0x00800001
+#define SCARLETT2_USB_DATA_CMD                   0x00800002
 
 #define SCARLETT2_USB_VOLUME_STATUS_OFFSET       0x31
 #define SCARLETT2_VOLUMES_BASE                   0x34
@@ -1065,6 +1179,112 @@ static int scarlett2_float_to_mixer_level(u32 v)
 	if (res < -160)
 		return -160;
 	return (res < 12) ? res : 12;
+}
+
+/* Convert a port number index (per info->ports) to a hardware ID */
+static u32 scarlett2_id_to_mux(const struct scarlett2_ports *ports, int direction, int num)
+{
+	int port_type;
+
+	if ((direction < 0) || (direction >= SCARLETT2_PORT_DIRECTIONS) || (num < 0))
+		return 0;
+
+	for (port_type = 0; port_type < SCARLETT2_PORT_TYPE_COUNT; ++port_type) {
+		if (num < ports[port_type].num[direction])
+			return ports[port_type].id + num;
+		num -= ports[port_type].num[direction];
+	}
+
+	return 0; /* Could not encode port */
+}
+
+static int scarlett2_count_ports(const struct scarlett2_ports *ports, int direction) {
+	int port_type, count = 0;
+
+	for (port_type=0; port_type < SCARLETT2_PORT_TYPE_COUNT; ++port_type)
+		count += ports[port_type].num[direction];
+
+	return count;
+}
+
+/* Convert a hardware ID to port number index (per info->ports) */
+static int scarlett2_mux_to_id(const struct scarlett2_ports *ports, int direction, u32 mux_id)
+{
+	int port_type, port_id, port_num, port_base;
+
+	if ((direction < 0) || (direction >= SCARLETT2_PORT_DIRECTIONS))
+		return -1; /* Could not decode port */
+
+	port_id  = mux_id & SCARLETT2_PORT_ID_MASK;
+	if (port_id == SCARLETT2_PORT_ID_NONE)
+		return -1;
+	
+	port_num = mux_id & SCARLETT2_PORT_NUM_MASK;
+	port_base= 0;
+
+	for (port_type=0; port_type < SCARLETT2_PORT_TYPE_COUNT; ++port_type) {
+		/* Port identifier matches? */
+		if (port_id == (ports[port_type].id & SCARLETT2_PORT_ID_MASK)) {
+			if (port_num < ports[port_type].num[direction])
+				return port_base + port_num;
+			port_num -= ports[port_type].num[direction];
+		}
+
+		port_base += ports[port_type].num[direction];
+	}
+
+	return -1; /* Could not decode port */
+}
+
+/* Format port number to the proper port name */
+static char *scarlett2_fmt_port_name(char *out, int len, const struct scarlett2_device_info *info, int direction, int num)
+{
+	int port_type;
+	const char *fmt;
+	char name[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
+	const struct scarlett2_ports *ports = info->ports;
+	const struct scarlett2_port_name *port_name;
+
+	strncpy(out, "Off", len);
+	if ((direction < 0) || (direction >= SCARLETT2_PORT_DIRECTIONS) || (num < 0))
+		return out;
+
+	for (port_type = 0; port_type < SCARLETT2_PORT_TYPE_COUNT; ++port_type) {
+		/* The number does match the range ? */
+		if (num < ports[port_type].num[direction]) {
+			/* Is there 'special' name found ? */
+			name[0] = '\0';
+			for (port_name = info->port_names; port_name->name != NULL; ++port_name) {
+				if ((port_name->direction == direction) &&
+				    (port_name->type == port_type) &&
+				    (port_name->index == num)) {
+					snprintf(name, SNDRV_CTL_ELEM_ID_NAME_MAXLEN, " (%s)", port_name->name);
+					break;
+				}
+			}
+
+			/* Format the physical port name */
+			fmt  = (direction == SCARLETT2_PORT_IN) ? ports[port_type].src_descr : ports[port_type].dst_descr;
+			num += (direction == SCARLETT2_PORT_IN) ? ports[port_type].src_num_offset : 1;
+			snprintf(out, len, fmt, num);
+			strncat(out, name, len);
+			return out;
+		}
+
+		num -= ports[port_type].num[direction];
+	}
+
+	return out;
+}
+
+/* get the starting port index number for a given port type/direction */
+static int scarlett2_get_port_num(const struct scarlett2_ports *ports, int direction, int type, int num)
+{
+	int i;
+	for (i = 0; i < type; i++)
+		num += ports[i].num[direction];
+
+	return num;
 }
 
 static void scarlett2_fill_request_header(struct scarlett2_mixer_data *private,
@@ -1377,22 +1597,44 @@ static int scarlett2_usb_set_mix(struct usb_mixer_interface *mixer,
 			     NULL, 0);
 }
 
-/* Convert a port number index (per info->ports) to a hardware ID */
-static u32 scarlett2_mux_src_num_to_id(const struct scarlett2_ports *ports,
-				       int num)
+/* Send USB messages to get mux inputs */
+static int scarlett2_usb_get_mux(struct usb_mixer_interface *mixer)
 {
-	int port_type;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
+	const struct scarlett2_ports *ports = info->ports;
+	int mux_size, i, src_port, dst_port, err;
+	u32 mux_id;
+	struct {
+		__le16 num;
+		__le16 count;
+	} __packed req;
 
-	for (port_type = 0;
-	     port_type < SCARLETT2_PORT_TYPE_COUNT;
-	     port_type++) {
-		if (num < ports[port_type].num[SCARLETT2_PORT_IN])
-			return ports[port_type].id | num;
-		num -= ports[port_type].num[SCARLETT2_PORT_IN];
+	__le32 data[SCARLETT2_MUX_MAX];
+
+	mux_size  = info->mux_size[SCARLETT2_PORT_OUT];
+
+	/* Send the request */
+	req.num   = 0;
+	req.count = cpu_to_le16(mux_size);
+	err = scarlett2_usb(mixer, SCARLETT2_USB_GET_MUX, &req, 2 * sizeof(__le16), data, sizeof(__le32) * mux_size);
+	if (err < 0)
+		return err;
+
+	/* Clear mux state */
+	for (i=0 ; i < SCARLETT2_MUX_MAX; ++i)
+		private->mux[i] = 0;
+
+	for (i=0; i<mux_size; ++i) {
+		/* Decode input and output port indexes, remember mux state for the port */
+		mux_id = le32_to_cpu(data[i]);
+		src_port = scarlett2_mux_to_id(ports, SCARLETT2_PORT_IN, mux_id >> 12);
+		dst_port = scarlett2_mux_to_id(ports, SCARLETT2_PORT_OUT, mux_id);
+		if ((dst_port >= 0) && (dst_port < SCARLETT2_MUX_MAX))
+			private->mux[dst_port] = src_port;
 	}
 
-	/* Oops */
-	return 0;
+	return err;
 }
 
 /* Send USB messages to set mux inputs */
@@ -1401,15 +1643,16 @@ static int scarlett2_usb_set_mux(struct usb_mixer_interface *mixer)
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	const struct scarlett2_device_info *info = private->info;
 	const struct scarlett2_ports *ports = info->ports;
-	int rate, port_dir_rate;
+	int direction, conn_id, order, port, port_idx, err = 0;
+	u32 src_mux, dst_mux;
 
-	static const int assignment_order[SCARLETT2_PORT_TYPE_COUNT] = {
+	static const int assignment_order[] = {
 		SCARLETT2_PORT_TYPE_PCM,
 		SCARLETT2_PORT_TYPE_ANALOGUE,
 		SCARLETT2_PORT_TYPE_SPDIF,
 		SCARLETT2_PORT_TYPE_ADAT,
 		SCARLETT2_PORT_TYPE_MIX,
-		SCARLETT2_PORT_TYPE_NONE,
+		SCARLETT2_PORT_TYPE_TALKBACK
 	};
 
 	struct {
@@ -1418,51 +1661,40 @@ static int scarlett2_usb_set_mux(struct usb_mixer_interface *mixer)
 		__le32 data[SCARLETT2_MUX_MAX];
 	} __packed req;
 
-	req.pad = 0;
-
 	/* mux settings for each rate */
-	for (rate = 0, port_dir_rate = SCARLETT2_PORT_OUT_44;
-	     port_dir_rate <= SCARLETT2_PORT_OUT_176;
-	     rate++, port_dir_rate++) {
-		int order_num, i, err;
+	for (direction = SCARLETT2_PORT_OUT_44; direction <= SCARLETT2_PORT_OUT_176; ++direction) {
+		/* init request */
+		req.pad = 0;
+		req.num = cpu_to_le16(direction - SCARLETT2_PORT_OUT_44);
 
-		req.num = cpu_to_le16(rate);
+		/* form the request data */
+		conn_id = 0;
+		for (order = 0; order < sizeof(assignment_order)/sizeof(int); ++order) {
+			int port_type = assignment_order[order];
 
-		for (order_num = 0, i = 0;
-		     order_num < SCARLETT2_PORT_TYPE_COUNT;
-		     order_num++) {
-			int port_type = assignment_order[order_num];
-			int j = scarlett2_get_port_start_num(ports,
-							     SCARLETT2_PORT_OUT,
-							     port_type);
-			int port_id = ports[port_type].id;
-			int channel;
+			for (port = 0; port < ports[port_type].num[direction]; ++port) {
+				port_idx = scarlett2_get_port_num(ports, SCARLETT2_PORT_OUT, port_type, port);
 
-			for (channel = 0;
-			     channel < ports[port_type].num[port_dir_rate];
-			     channel++, i++, j++)
-				/* lower 12 bits for the destination and
-				 * next 12 bits for the source
-				 */
-				req.data[i] = !port_id
-					? 0
-					: cpu_to_le32(
-						port_id |
-						channel |
-						scarlett2_mux_src_num_to_id(
-							ports, private->mux[j]
-						) << 12
-					  );
+				/* Lower 12 bits for destination, next 12 bits for source */
+				src_mux = scarlett2_id_to_mux(ports, SCARLETT2_PORT_IN, private->mux[port_idx]);
+				dst_mux = scarlett2_id_to_mux(ports, SCARLETT2_PORT_OUT, port_idx);
+				req.data[conn_id++] = cpu_to_le32((src_mux << 12) | dst_mux);
+			}
 		}
 
+		/* Fill rest mux data with zeros */
+		for ( ; conn_id < info->mux_size[direction]; ++conn_id)
+			req.data[conn_id] = 0;
+
+		/* Send the SET_MUX notification */
 		err = scarlett2_usb(mixer, SCARLETT2_USB_SET_MUX,
-				    &req, (i + 1) * sizeof(u32),
+				    &req, 2 * sizeof(__le16) + conn_id * sizeof(__le32),
 				    NULL, 0);
 		if (err < 0)
 			return err;
 	}
 
-	return 0;
+	return err;
 }
 
 /* Send USB message to get meter levels */
@@ -2132,7 +2364,7 @@ static int scarlett2_add_line_out_ctls(struct usb_mixer_interface *mixer)
 
 	/* Add R/O HW volume control */
 	if (info->line_out_hw_vol) {
-		snprintf(s, sizeof(s), "Master Out HW Volume");
+		snprintf(s, sizeof(s), "Master HW Out Volume");
 		err = scarlett2_add_new_ctl(mixer,
 					    &scarlett2_master_volume_ctl,
 					    0, 1, s, &private->master_vol_ctl);
@@ -2378,37 +2610,29 @@ static int scarlett2_add_mixer_ctls(struct usb_mixer_interface *mixer)
 }
 
 /*** Mux Source Selection Controls ***/
-
 static int scarlett2_mux_src_enum_ctl_info(struct snd_kcontrol *kctl,
 					   struct snd_ctl_elem_info *uinfo)
 {
 	struct usb_mixer_elem_info *elem = kctl->private_data;
-	struct scarlett2_mixer_data *private = elem->head.mixer->private_data;
-	const struct scarlett2_ports *ports = private->info->ports;
-	unsigned int item = uinfo->value.enumerated.item;
-	int items = private->num_mux_srcs;
-	int port_type;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	int item = uinfo->value.enumerated.item;
+	int items = private->num_inputs + 1;
+	int port = clamp(item, 0, private->num_inputs) - 1;
 
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
+	uinfo->type  = SNDRV_CTL_ELEM_TYPE_ENUMERATED;
 	uinfo->count = elem->channels;
 	uinfo->value.enumerated.items = items;
-
+	if (!items)
+		return 0;
 	if (item >= items)
 		item = uinfo->value.enumerated.item = items - 1;
 
-	for (port_type = 0;
-	     port_type < SCARLETT2_PORT_TYPE_COUNT;
-	     port_type++) {
-		if (item < ports[port_type].num[SCARLETT2_PORT_IN]) {
-			sprintf(uinfo->value.enumerated.name,
-				ports[port_type].src_descr,
-				item + ports[port_type].src_num_offset);
-			return 0;
-		}
-		item -= ports[port_type].num[SCARLETT2_PORT_IN];
-	}
+	scarlett2_fmt_port_name(uinfo->value.enumerated.name,
+	                        sizeof(uinfo->value.enumerated.name), private->info,
+	                        SCARLETT2_PORT_IN, port);
 
-	return -EINVAL;
+	return 0;
 }
 
 static int scarlett2_mux_src_enum_ctl_get(struct snd_kcontrol *kctl,
@@ -2416,8 +2640,8 @@ static int scarlett2_mux_src_enum_ctl_get(struct snd_kcontrol *kctl,
 {
 	struct usb_mixer_elem_info *elem = kctl->private_data;
 	struct scarlett2_mixer_data *private = elem->head.mixer->private_data;
-
-	ucontrol->value.enumerated.item[0] = private->mux[elem->control];
+	
+	ucontrol->value.enumerated.item[0] = private->mux[elem->control] + 1; /* Element 0 is always 'Off' */
 	return 0;
 }
 
@@ -2433,8 +2657,8 @@ static int scarlett2_mux_src_enum_ctl_put(struct snd_kcontrol *kctl,
 	mutex_lock(&private->data_mutex);
 
 	oval = private->mux[index];
-	val = clamp(ucontrol->value.integer.value[0],
-		    0L, private->num_mux_srcs - 1L);
+	val  = ucontrol->value.integer.value[0];
+	val  = clamp(val, 0, private->num_inputs) - 1;
 
 	if (oval == val)
 		goto unlock;
@@ -2457,34 +2681,36 @@ static const struct snd_kcontrol_new scarlett2_mux_src_enum_ctl = {
 	.put  = scarlett2_mux_src_enum_ctl_put,
 };
 
-static int scarlett2_add_mux_enums(struct usb_mixer_interface *mixer)
+static int scarlett2_init_mux(struct usb_mixer_interface *mixer)
 {
 	struct scarlett2_mixer_data *private = mixer->private_data;
-	const struct scarlett2_ports *ports = private->info->ports;
-	int port_type, channel, i;
+	int port, err;
+	char name[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
 
-	for (i = 0, port_type = 0;
-	     port_type < SCARLETT2_PORT_TYPE_COUNT;
-	     port_type++) {
-		for (channel = 0;
-		     channel < ports[port_type].num[SCARLETT2_PORT_OUT];
-		     channel++, i++) {
-			int err;
-			char s[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
-			const char *const descr = ports[port_type].dst_descr;
+	/* Read MUX settings */
+	err = scarlett2_usb_get_mux(mixer);
+	if (err < 0)
+		return err;
 
-			snprintf(s, sizeof(s) - 5, descr, channel + 1);
-			strcat(s, " Enum");
+	/* Apply MUX settings */
+	err = scarlett2_usb_set_mux(mixer);
+	if (err < 0)
+		return err;
 
-			err = scarlett2_add_new_ctl(mixer,
-						    &scarlett2_mux_src_enum_ctl,
-						    i, 1, s, NULL);
-			if (err < 0)
-				return err;
-		}
+	/* Create mux control ports based on output port list */
+	for (port = 0; port < private->num_outputs; ++port) {
+		/* Create port descriptor */
+		scarlett2_fmt_port_name(name, SNDRV_CTL_ELEM_ID_NAME_MAXLEN, private->info, SCARLETT2_PORT_OUT, port);
+		strncat(name, " Source", SNDRV_CTL_ELEM_ID_NAME_MAXLEN);
+
+		err = scarlett2_add_new_ctl(mixer,
+					    &scarlett2_mux_src_enum_ctl,
+					    port, 1, name, NULL);
+		if (err < 0)
+			return err;
 	}
 
-	return 0;
+	return err;
 }
 
 /*** Meter Controls ***/
@@ -2879,73 +3105,6 @@ static void scarlett2_private_suspend(struct usb_mixer_interface *mixer)
 		scarlett2_config_save(private->mixer);
 }
 
-/*** Initialisation ***/
-
-static int scarlett2_count_mux_srcs(const struct scarlett2_ports *ports)
-{
-	int port_type, count = 0;
-
-	for (port_type = 0;
-	     port_type < SCARLETT2_PORT_TYPE_COUNT;
-	     port_type++)
-		count += ports[port_type].num[SCARLETT2_PORT_IN];
-
-	return count;
-}
-
-/* Default routing connects PCM outputs and inputs to Analogue,
- * S/PDIF, then ADAT
- */
-static void scarlett2_init_routing(u8 *mux,
-				   const struct scarlett2_ports *ports)
-{
-	int i, input_num, input_count, port_type;
-	int output_num, output_count, port_type_connect_num;
-
-	static const int connect_order[] = {
-		SCARLETT2_PORT_TYPE_ANALOGUE,
-		SCARLETT2_PORT_TYPE_SPDIF,
-		SCARLETT2_PORT_TYPE_ADAT,
-		-1
-	};
-
-	/* Assign PCM inputs (routing outputs) */
-	output_num = scarlett2_get_port_start_num(ports,
-						  SCARLETT2_PORT_OUT,
-						  SCARLETT2_PORT_TYPE_PCM);
-	output_count = ports[SCARLETT2_PORT_TYPE_PCM].num[SCARLETT2_PORT_OUT];
-
-	for (port_type = connect_order[port_type_connect_num = 0];
-	     port_type >= 0;
-	     port_type = connect_order[++port_type_connect_num]) {
-		input_num = scarlett2_get_port_start_num(
-			ports, SCARLETT2_PORT_IN, port_type);
-		input_count = ports[port_type].num[SCARLETT2_PORT_IN];
-		for (i = 0;
-		     i < input_count && output_count;
-		     i++, output_count--)
-			mux[output_num++] = input_num++;
-	}
-
-	/* Assign PCM outputs (routing inputs) */
-	input_num = scarlett2_get_port_start_num(ports,
-						 SCARLETT2_PORT_IN,
-						 SCARLETT2_PORT_TYPE_PCM);
-	input_count = ports[SCARLETT2_PORT_TYPE_PCM].num[SCARLETT2_PORT_IN];
-
-	for (port_type = connect_order[port_type_connect_num = 0];
-	     port_type >= 0;
-	     port_type = connect_order[++port_type_connect_num]) {
-		output_num = scarlett2_get_port_start_num(
-			ports, SCARLETT2_PORT_OUT, port_type);
-		output_count = ports[port_type].num[SCARLETT2_PORT_OUT];
-		for (i = 0;
-		     i < output_count && input_count;
-		     i++, input_count--)
-			mux[output_num++] = input_num++;
-	}
-}
-
 /* Look through the interface descriptors for the Focusrite Control
  * interface (bInterfaceClass = 255 Vendor Specific Class) and set the
  * interface number, endpoint address, packet size, and interval in
@@ -2993,7 +3152,8 @@ static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 	mixer->private_free = scarlett2_private_free;
 	mixer->private_suspend = scarlett2_private_suspend;
 	private->info = info;
-	private->num_mux_srcs = scarlett2_count_mux_srcs(info->ports);
+	private->num_inputs = scarlett2_count_ports(info->ports, SCARLETT2_PORT_IN);
+	private->num_outputs = scarlett2_count_ports(info->ports, SCARLETT2_PORT_OUT);
 	private->scarlett2_seq = 0;
 	private->mixer = mixer;
 	private->vol_updated = 0;
@@ -3015,9 +3175,6 @@ static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 
 	if (err < 0)
 		return -EINVAL;
-
-	/* Setup default routing */
-	scarlett2_init_routing(private->mux, info->ports);
 
 	return 0;
 }
@@ -3092,7 +3249,7 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 			private->pow_switch[i] = !! (pow_switch & (1 << i));
 	}
 
-	/* Mass Storage Device (MSD) settings */
+	/* Mass Storage Device (MSD) mode */
 	if (info->has_msd_mode) {
 		err = scarlett2_usb_get_config(
 			mixer,
@@ -3463,36 +3620,19 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer)
 {
 	struct snd_usb_audio *chip = mixer->chip;
 	const struct scarlett2_device_info *info;
-	int err;
+	int i, err;
 
 	/* only use UAC_VERSION_2 */
 	if (!mixer->protocol)
 		return 0;
 
-	switch (chip->usb_id) {
-	case USB_ID(0x1235, 0x8203):
-		info = &s6i6_gen2_info;
-		break;
-	case USB_ID(0x1235, 0x8204):
-		info = &s18i8_gen2_info;
-		break;
-	case USB_ID(0x1235, 0x8201):
-		info = &s18i20_gen2_info;
-		break;
-	case USB_ID(0x1235, 0x8212):
-		info = &s4i4_gen3_info;
-		break;
-	case USB_ID(0x1235, 0x8213):
-		info = &s8i6_gen3_info;
-		break;
-	case USB_ID(0x1235, 0x8214):
-		info = &s18i8_gen3_info;
-		break;
-	case USB_ID(0x1235, 0x8215):
-		info = &s18i20_gen3_info;
-		break;
-	default: /* device not (yet) supported */
-		return -EINVAL;
+	/* Find actual device descriptor */
+	for (i=0; ; ++i) {
+		info = scarlett2_supported_devices[i];
+		if (info == NULL) /* End of list, device is not (yet) supported */
+			return -EINVAL;
+		if (info->usb_id == chip->usb_id)
+			break;
 	}
 
 	if (!(chip->setup & SCARLETT2_ENABLE)) {
@@ -3539,7 +3679,7 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer)
 		return err;
 
 	/* Create the input, output, and mixer mux input selections */
-	err = scarlett2_add_mux_enums(mixer);
+	err = scarlett2_init_mux(mixer);
 	if (err < 0)
 		return err;
 
