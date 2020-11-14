@@ -379,6 +379,7 @@ static int set_sync_ep_implicit_fb_quirk(struct snd_usb_substream *subs,
 		ep = 0x82;
 		ifnum = 0;
 		goto add_sync_ep_from_ifnum;
+	case USB_ID(0x1235, 0x8210): /* Focusrite Scarlett 2i2 3rd Gen */
 	case USB_ID(0x1235, 0x8212): /* Focusrite Scarlett 4i4 3rd Gen */
 	case USB_ID(0x1235, 0x8213): /* Focusrite Scarlett 8i6 3rd Gen */
 	case USB_ID(0x1235, 0x8214): /* Focusrite Scarlett 18i8 3rd Gen */

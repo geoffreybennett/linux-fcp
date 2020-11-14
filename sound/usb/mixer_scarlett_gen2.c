@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- *   Focusrite Scarlett 6i6/18i8/18i20 Gen 2 and 4i4/8i6/18i8/18i20
+ *   Focusrite Scarlett 6i6/18i8/18i20 Gen 2 and 2i2/4i4/8i6/18i8/18i20
  *   Gen 3 Driver for ALSA
  *
  *   Copyright (c) 2018-2020 by Geoffrey D. Bennett <g at b4.vu>
@@ -22,7 +22,7 @@
  */
 
 /* Mixer Interface for the Focusrite Scarlett 6i6/18i8/18i20 Gen 2 and
- * 4i4/8i6/18i8/18i20 Gen 3 audio interfaces. Based on the Gen 1
+ * 2i2/4i4/8i6/18i8/18i20 Gen 3 audio interfaces. Based on the Gen 1
  * driver and rewritten.
  */
 
@@ -42,6 +42,10 @@
  * Scarlett 18i8/18i20 Gen 3 support added in June 2020 (thanks to
  * Darren Jaeckel, Alex Sedlack, and Clovis Lunel for providing usbmon
  * output and testing).
+ *
+ * Scarlett 2i2 Gen 3 support added in November 2020 (thanks to Alexander
+ * Vorona for taking 2i2 USB protocol dumps).
+ *
  *
  * This ALSA mixer gives access to (model-dependent):
  *  - input, output, mixer-matrix muxes
@@ -202,30 +206,16 @@ static const u16 scarlett2_sw_config_mixer_values[173] = {
 	0x4080, 0x4090, 0x40a0, 0x40b0, 0x40c0
 };
 
-/* Maximum number of analogue outputs */
-#define SCARLETT2_ANALOGUE_MAX 10
-
-/* Maximum number of level, pad, and air switches */
-#define SCARLETT2_LEVEL_SWITCH_MAX 2
-#define SCARLETT2_PAD_SWITCH_MAX 8
-#define SCARLETT2_AIR_SWITCH_MAX 8
-#define SCARLETT2_48V_SWITCH_MAX 2
-
-/* Maximum number of inputs to the mixer */
-#define SCARLETT2_INPUT_MIX_MAX 24
-
-/* Maximum number of outputs from the mixer */
-#define SCARLETT2_OUTPUT_MIX_MAX 12
-
-/* Maximum size of the data in the USB mux assignment message:
- * 18 inputs, 2 loopbacks, 20 outputs, 24 mixer inputs, 13 spare
- */
-#define SCARLETT2_MUX_MAX 77
-
-/* Number of meters:
- * 18 inputs, 20 outputs, 18 matrix inputs (XX FIXME)
- */
-#define SCARLETT2_NUM_METERS 56
+#define SCARLETT2_ANALOGUE_MAX             10   /* Maximum number of analogue outputs */
+#define SCARLETT2_LEVEL_SWITCH_MAX         2    /* Maximum number of LINE/INST switches */
+#define SCARLETT2_PAD_SWITCH_MAX           8    /* Maximum number of PAD switches */
+#define SCARLETT2_AIR_SWITCH_MAX           8    /* Maximum number of AIR switches */
+#define SCARLETT2_48V_SWITCH_MAX           2    /* Maximum number of 48V switches */
+#define SCARLETT2_BUTTON_MAX               2    /* Hardware buttons on the 18i20 */
+#define SCARLETT2_INPUT_MIX_MAX            24   /* Maximum number of inputs to the mixer */
+#define SCARLETT2_OUTPUT_MIX_MAX           12   /* Maximum number of outputs from the mixer */
+#define SCARLETT2_MUX_MAX                  77   /* The maximum possible MUX connection count */
+#define SCARLETT2_NUM_METERS               56   /* Number of meters: 18 inputs, 20 outputs, 18 matrix inputs (XX FIXME) */
 
 /* Hardware port types:
  * - None (no input to mux)
@@ -267,8 +257,26 @@ enum {
 	SCARLETT2_PORT_DIRECTIONS = 5,
 };
 
-/* Hardware buttons on the 18i20 */
-#define SCARLETT2_BUTTON_MAX 2
+/* Configuration parameters that can be read and written */
+enum {
+	SCARLETT2_CONFIG_BUTTONS = 0,
+	SCARLETT2_CONFIG_LINE_OUT_VOLUME = 1,
+	SCARLETT2_CONFIG_SW_HW_SWITCH = 2,
+	SCARLETT2_CONFIG_LEVEL_SWITCH = 3,
+	SCARLETT2_CONFIG_PAD_SWITCH = 4,
+	SCARLETT2_CONFIG_AIR_SWITCH = 5,
+	SCARLETT2_CONFIG_SPDIF_SWITCH = 6,
+	SCARLETT2_CONFIG_48V_SWITCH = 7,
+	SCARLETT2_CONFIG_MSD_SWITCH = 8,
+	SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH = 9,
+	SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH = 10,
+	SCARLETT2_CONFIG_GAIN_HALO_1 = 11,
+	SCARLETT2_CONFIG_GAIN_HALO_2 = 12,
+	SCARLETT2_CONFIG_MIX_TALKBACK = 13,
+	SCARLETT2_CONFIG_RETAIN_48V = 14,
+	SCARLETT2_CONFIG_COUNT = 15
+};
+
 
 static const char *const scarlett2_button_names[SCARLETT2_BUTTON_MAX] = {
 	"Mute", "Dim"
@@ -296,6 +304,16 @@ struct scarlett2_ports {
 	const char * const dst_descr;
 };
 
+/* Location, size, and activation command number for the configuration
+ * parameters
+ */
+struct scarlett2_config {
+	u8 offset;
+	u8 size;
+	u8 activate;
+};
+
+/* The device descriptor structure */
 struct scarlett2_device_info {
 	u32 usb_id; /* USB device identifier */
 	u8 line_out_hw_vol; /* line out hw volume is sw controlled */
@@ -304,13 +322,20 @@ struct scarlett2_device_info {
 	u8 pad_input_count; /* inputs with pad selectable */
 	u8 air_input_count; /* inputs with air selectable */
 	u8 power_48v_count; /* 48V phantom power */
+	u8 has_retain48v;  /* Retain 48V switch is present */
 	u8 has_msd_mode; /* Gen 3 devices have an internal MSD mode switch */
 	u8 has_speaker_switching; /* main/alt speaker switching */
 	u8 has_talkback; /* 18i20 Gen 3 has 'talkback' feature */
+	u8 has_mux; /* MUX (routing) is present */
+	u8 has_mixer; /* Internal Mixer is present */
+	u8 has_sw_config; /* Software configuration is present */
+	u8 has_meters; /* Device has meters */
+	u8 has_hw_volume; /* Has hardware volume control */
 	const char * const line_out_descrs[SCARLETT2_ANALOGUE_MAX];
 	const struct scarlett2_port_name * const port_names; /* Special names of ports */
 	const u8 mux_size[SCARLETT2_PORT_DIRECTIONS]; /* The maximum number of elements per mux */
 	struct scarlett2_ports ports[SCARLETT2_PORT_TYPE_COUNT];
+	const struct scarlett2_config * const config;
 };
 
 struct scarlett2_sw_cfg_volume {
@@ -343,6 +368,7 @@ struct scarlett2_mixer_data {
 	u8 air_switch[SCARLETT2_AIR_SWITCH_MAX];
 	u8 pow_switch[SCARLETT2_48V_SWITCH_MAX];
 	u8 msd_switch;
+	u8 retain48v_switch;
 	u8 speaker_switch;
 	u8 talkback_switch;
 	u8 buttons[SCARLETT2_BUTTON_MAX];
@@ -370,6 +396,77 @@ struct scarlett2_mixer_data {
 	__le32 *sw_cfg_cksum;                                             /* Software configuration checksum */
 };
 
+/*
+ * PRO-class device configuration (8i6, 18i8, 18i20)
+ */
+static const struct scarlett2_config scarlett2_pro_config_items[SCARLETT2_CONFIG_COUNT] = {
+	[SCARLETT2_CONFIG_BUTTONS] =                   /* Mute/Dim Buttons */
+		{ .offset = 0x31, .size = 1, .activate = 2 },
+
+	[SCARLETT2_CONFIG_LINE_OUT_VOLUME] =           /* Line Out Volume */
+		{ .offset = 0x34, .size = 2, .activate = 1 },
+
+	[SCARLETT2_CONFIG_SW_HW_SWITCH] =              /* SW/HW Volume Switch */
+		{ .offset = 0x66, .size = 1, .activate = 3 },
+
+	[SCARLETT2_CONFIG_LEVEL_SWITCH] =              /* Inst Switch */
+		{ .offset = 0x7c, .size = 1, .activate = 7 },
+
+	[SCARLETT2_CONFIG_PAD_SWITCH] =                /* Pad Switch */
+		{ .offset = 0x84, .size = 1, .activate = 8 },
+
+	[SCARLETT2_CONFIG_AIR_SWITCH] =                /* Air Switch */
+		{ .offset = 0x8c, .size = 1, .activate = 8 },
+
+	[SCARLETT2_CONFIG_SPDIF_SWITCH] =              /* S/PDIF Source */
+		{ .offset = 0x94, .size = 1, .activate = 6 },
+
+	[SCARLETT2_CONFIG_48V_SWITCH] =                /* Phantom (48V) power */
+		{ .offset = 0x9c, .size = 1, .activate = 8 },
+
+	[SCARLETT2_CONFIG_MSD_SWITCH] =                /* MSD Mode */
+		{ .offset = 0x9d, .size = 1, .activate = 6 },
+
+	[SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH] =   /* Alternate Speaker and Talkback switches */
+		{ .offset = 0x9f, .size = 1, .activate = 10 },
+
+	[SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH] =  /* Speaker Switching */
+		{ .offset = 0xa0, .size = 1, .activate = 10 },
+
+	[SCARLETT2_CONFIG_GAIN_HALO_1] =               /* Gain Halos */
+		{ .offset = 0xa1, .size = 1, .activate = 9  },
+
+	[SCARLETT2_CONFIG_GAIN_HALO_2] =               /* Gain Halo? */
+		{ .offset = 0xa8, .size = 1, .activate = 11 },
+
+	[SCARLETT2_CONFIG_MIX_TALKBACK] =              /* Talkback enable flags for each output of internal mixer */
+		{ .offset = 0xb0, .size = 2, .activate = 10 },
+	
+	[SCARLETT2_CONFIG_RETAIN_48V] =                /* Retain 48V switch */
+		{ .offset = 0x9e, .size = 1, .activate = 0 }
+};
+
+/*
+ * Configuration space for home segment devices like Scarlett 2i2
+ */
+static const struct scarlett2_config scarlett2_home_config_items[SCARLETT2_CONFIG_COUNT] = {
+	[SCARLETT2_CONFIG_LEVEL_SWITCH] =              /* Inst Switch */
+		{ .offset = 0x08, .size = 1, .activate = 7 },
+
+	[SCARLETT2_CONFIG_AIR_SWITCH] =                /* Air Switch */
+		{ .offset = 0x09, .size = 1, .activate = 8 },
+};
+
+/* proprietary request/response format */
+struct scarlett2_usb_packet {
+	__le32 cmd;
+	__le16 size;
+	__le16 seq;
+	__le32 error;
+	__le32 pad;
+	u8 data[];
+};
+
 /*** Model-specific data ***/
 static const struct scarlett2_port_name s6i6_gen2_ports[] = {
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Headphones 1 L" },
@@ -389,6 +486,16 @@ static const struct scarlett2_device_info s6i6_gen2_info = {
 
 	/* The first two analogue inputs have an optional pad. */
 	.pad_input_count = 2,
+
+	.has_mux = 1,
+
+	.has_mixer = 1,
+
+	.has_sw_config = 1,
+
+	.has_meters = 1,
+
+	.has_hw_volume = 1,
 
 	.line_out_descrs = {
 		"Headphones 1 L",
@@ -431,6 +538,8 @@ static const struct scarlett2_device_info s6i6_gen2_info = {
 			.dst_descr = "PCM Out %02d"
 		},
 	},
+
+	.config = scarlett2_pro_config_items
 };
 
 static const struct scarlett2_port_name s18i8_gen2_port_names[] = {
@@ -453,6 +562,16 @@ static const struct scarlett2_device_info s18i8_gen2_info = {
 
 	/* The first four analogue inputs have an optional pad. */
 	.pad_input_count = 4,
+
+	.has_mux = 1,
+
+	.has_mixer = 1,
+
+	.has_sw_config = 1,
+
+	.has_meters = 1,
+
+	.has_hw_volume = 1,
 
 	.line_out_descrs = {
 		"Monitor L",
@@ -504,6 +623,8 @@ static const struct scarlett2_device_info s18i8_gen2_info = {
 			.dst_descr = "PCM Out %02d"
 		},
 	},
+
+	.config = scarlett2_pro_config_items
 };
 
 static const struct scarlett2_port_name s18i20_gen2_port_names[] = {
@@ -527,6 +648,16 @@ static const struct scarlett2_device_info s18i20_gen2_info = {
 	/* Mute and dim buttons */
 	.button_count = 2,
 
+	.has_mux = 1,
+
+	.has_mixer = 1,
+
+	.has_sw_config = 1,
+
+	.has_meters = 1,
+
+	.has_hw_volume = 1,
+
 	.line_out_descrs = {
 		"Monitor L",
 		"Monitor R",
@@ -540,7 +671,7 @@ static const struct scarlett2_device_info s18i20_gen2_info = {
 		"Headphones 2 R",
 	},
 
-	.port_names = s18i8_gen2_port_names,
+	.port_names = s18i20_gen2_port_names,
 
 	.mux_size = { 77, 77, 77, 73, 46 },
 
@@ -585,6 +716,25 @@ static const struct scarlett2_device_info s18i20_gen2_info = {
 			.dst_descr = "PCM Out %02d"
 		},
 	},
+
+	.config = scarlett2_pro_config_items
+};
+
+static const struct scarlett2_device_info s2i2_gen3_info = {
+	.usb_id = USB_ID(0x1235, 0x8210),
+
+	/* The first two analogue inputs can be switched between line
+	 * and instrument levels.
+	 */
+	.level_input_count = 2,
+
+	/* The first two analogue inputs have an optional "air" feature. */
+	.air_input_count = 2,
+
+	/* One 48V phantom power switch */
+	/* .power_48v_count = 1, */
+
+	.config = scarlett2_home_config_items
 };
 
 static const struct scarlett2_port_name s4i4_gen3_port_names[] = {
@@ -614,6 +764,16 @@ static const struct scarlett2_device_info s4i4_gen3_info = {
 
 	/* Gen 3 devices have an MSD mode */
 	.has_msd_mode = 1,
+
+	.has_mux = 1,
+
+	.has_mixer = 1,
+
+	.has_sw_config = 1,
+
+	.has_meters = 1,
+
+	.has_hw_volume = 1,
 
 	.line_out_descrs = {
 		"Monitor L",
@@ -649,6 +809,8 @@ static const struct scarlett2_device_info s4i4_gen3_info = {
 			.dst_descr = "PCM Out %02d"
 		},
 	},
+
+	.config = scarlett2_pro_config_items
 };
 
 static const struct scarlett2_port_name s8i6_gen3_port_names[] = {
@@ -679,6 +841,19 @@ static const struct scarlett2_device_info s8i6_gen3_info = {
 	/* Gen 3 devices have an MSD mode */
 	.has_msd_mode = 1,
 
+	/* Has a 'Retain 48V' switch */
+	.has_retain48v = 1,
+
+	.has_mux = 1,
+
+	.has_mixer = 1,
+
+	.has_sw_config = 1,
+
+	.has_meters = 1,
+
+	.has_hw_volume = 1,
+
 	.line_out_descrs = {
 		"Headphones 1 L",
 		"Headphones 1 R",
@@ -688,7 +863,7 @@ static const struct scarlett2_device_info s8i6_gen3_info = {
 
 	.port_names = s8i6_gen3_port_names,
 
-	.mux_size = { 77, 77, 77, 73, 46 },
+	.mux_size = { 42, 42, 42, 42, 42 },
 
 	.ports = {
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
@@ -720,17 +895,19 @@ static const struct scarlett2_device_info s8i6_gen3_info = {
 			.dst_descr = "PCM Out %02d"
 		},
 	},
+
+	.config = scarlett2_pro_config_items
 };
 
 static const struct scarlett2_port_name s18i8_gen3_port_names[] = {
-	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Monitor 1 L" },
-	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Monitor 1 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Main Monitor L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Main Monitor R" },
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 2, "Headphones 1 L" },
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 3, "Headphones 1 R" },
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 4, "Headphones 2 L" },
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 5, "Headphones 2 R" },
-	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 6, "Monitor 2 L" },
-	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 7, "Monitor 2 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 6, "Alt Monitor L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 7, "Alt Monitor R" },
 	{ -1, -1, -1, NULL }
 };
 
@@ -765,20 +942,33 @@ static const struct scarlett2_device_info s18i8_gen3_info = {
 	/* Has a main/alt speaker switch */
 	.has_speaker_switching = 1,
 
+	/* Has a 'Retain 48V' switch */
+	.has_retain48v = 1,
+
+	.has_mux = 1,
+
+	.has_mixer = 1,
+
+	.has_sw_config = 1,
+
+	.has_meters = 1,
+
+	.has_hw_volume = 1,
+
 	.line_out_descrs = {
 		"Monitor 1 L",
 		"Monitor 1 R",
+		"Monitor 2 L",
+		"Monitor 2 R",
 		"Headphones 1 L",
 		"Headphones 1 R",
 		"Headphones 2 L",
 		"Headphones 2 R",
-		"Monitor 2 L",
-		"Monitor 2 R",
 	},
 
 	.port_names = s18i8_gen3_port_names,
 
-	.mux_size = { 77, 77, 77, 73, 46 },
+	.mux_size = { 60, 60, 60, 56, 50 },
 
 	.ports = {
 		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
@@ -816,15 +1006,16 @@ static const struct scarlett2_device_info s18i8_gen3_info = {
 			.src_num_offset = 1,
 			.dst_descr = "PCM Out %02d"
 		},
-
 	},
+
+	.config = scarlett2_pro_config_items
 };
 
 static const struct scarlett2_port_name s18i20_gen3_port_names[] = {
-	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Monitor 1 L" },
-	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Monitor 1 R" },
-	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 2, "Monitor 2 L" },
-	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 3, "Monitor 2 R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Main Monitor L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Main Monitor R" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 2, "Alt Monitor L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 3, "Alt Monitor R" },
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 6, "Headphones 1 L" },
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 7, "Headphones 1 R" },
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 8, "Headphones 2 L" },
@@ -863,9 +1054,22 @@ static const struct scarlett2_device_info s18i20_gen3_info = {
 
 	/* Has a main/alt speaker switch */
 	.has_speaker_switching = 1,
-	
+
 	/* Has a talkback speaker switch */
 	.has_talkback = 1,
+
+	/* Has a 'Retain 48V' switch */
+	.has_retain48v = 1,
+
+	.has_mux = 1,
+
+	.has_mixer = 1,
+
+	.has_sw_config = 1,
+
+	.has_meters = 1,
+
+	.has_hw_volume = 1,
 
 	.line_out_descrs = {
 		"Monitor 1 L",
@@ -931,6 +1135,8 @@ static const struct scarlett2_device_info s18i20_gen3_info = {
 			.dst_descr = "Talkback"
 		},
 	},
+
+	.config = scarlett2_pro_config_items
 };
 
 static const struct scarlett2_device_info *scarlett2_supported_devices[] = {
@@ -940,6 +1146,7 @@ static const struct scarlett2_device_info *scarlett2_supported_devices[] = {
 	&s18i20_gen2_info,
 
 	/* Supported Gen3 devices */
+	&s2i2_gen3_info,
 	&s4i4_gen3_info,
 	&s8i6_gen3_info,
 	&s18i8_gen3_info,
@@ -952,12 +1159,12 @@ static const struct scarlett2_device_info *scarlett2_supported_devices[] = {
 /*** USB Interactions ***/
 
 /* Interrupt flags for volume, mute/dim button, and sync changes */
-#define SCARLETT2_USB_INTERRUPT_ACK 0x00000001
-#define SCARLETT2_USB_INTERRUPT_SYNC_CHANGE 0x00000008
-#define SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE 0x00200000
-#define SCARLETT2_USB_INTERRUPT_VOL_CHANGE 0x00400000
-#define SCARLETT2_USB_INTERRUPT_LINE_CTL_CHANGE 0x00800000
-#define SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE 0x01000000
+#define SCARLETT2_USB_INTERRUPT_ACK              0x00000001
+#define SCARLETT2_USB_INTERRUPT_SYNC_CHANGE      0x00000008
+#define SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE    0x00200000
+#define SCARLETT2_USB_INTERRUPT_VOL_CHANGE       0x00400000
+#define SCARLETT2_USB_INTERRUPT_LINE_CTL_CHANGE  0x00800000
+#define SCARLETT2_USB_INTERRUPT_SPEAKER_CHANGE   0x01000000
 
 /* Commands for sending/receiving requests/responses */
 #define SCARLETT2_USB_CMD_INIT 0
@@ -1013,145 +1220,6 @@ struct scarlett2_usb_volume_status {
 	/* front panel volume knob */
 	s16 master_vol; /* 0x76 */
 } __packed;
-
-/* Configuration parameters that can be read and written */
-enum {
-	SCARLETT2_CONFIG_BUTTONS = 0,
-	SCARLETT2_CONFIG_LINE_OUT_VOLUME = 1,
-	SCARLETT2_CONFIG_SW_HW_SWITCH = 2,
-	SCARLETT2_CONFIG_LEVEL_SWITCH = 3,
-	SCARLETT2_CONFIG_PAD_SWITCH = 4,
-	SCARLETT2_CONFIG_AIR_SWITCH = 5,
-	SCARLETT2_CONFIG_SPDIF_SWITCH = 6,
-	SCARLETT2_CONFIG_48V_SWITCH = 7,
-	SCARLETT2_CONFIG_MSD_SWITCH = 8,
-	SCARLETT2_CONFIG_MAIN_ALT_SPEAKER_SWITCH = 9,
-	SCARLETT2_CONFIG_SPEAKER_SWITCHING_SWITCH = 10,
-	SCARLETT2_CONFIG_GAIN_HALO_1 = 11,
-	SCARLETT2_CONFIG_GAIN_HALO_2 = 12,
-	SCARLETT2_CONFIG_MIX_TALKBACK = 13,
-	SCARLETT2_CONFIG_COUNT = 14
-};
-
-/* Location, size, and activation command number for the configuration
- * parameters
- */
-struct scarlett2_config {
-	u8 offset;
-	u8 size;
-	u8 activate;
-};
-
-static const struct scarlett2_config
-		scarlett2_config_items[SCARLETT2_CONFIG_COUNT] = {
-	/* Mute/Dim Buttons */
-	{
-		.offset = 0x31,
-		.size = 1,
-		.activate = 2
-	},
-
-	/* Line Out Volume */
-	{
-		.offset = 0x34,
-		.size = 2,
-		.activate = 1
-	},
-
-	/* SW/HW Volume Switch */
-	{
-		.offset = 0x66,
-		.size = 1,
-		.activate = 3
-	},
-
-	/* Inst Switch */
-	{
-		.offset = 0x7c,
-		.size = 1,
-		.activate = 7
-	},
-
-	/* Pad Switch */
-	{
-		.offset = 0x84,
-		.size = 1,
-		.activate = 8
-	},
-
-	/* Air Switch */
-	{
-		.offset = 0x8c,
-		.size = 1,
-		.activate = 8
-	},
-
-	/* S/PDIF Source */
-	{
-		.offset = 0x94,
-		.size = 1,
-		.activate = 6
-	},
-
-	/* Phantom (48V) power */
-	{
-		.offset = 0x9c,
-		.size = 1,
-		.activate = 8
-	},
-
-	/* MSD Mode */
-	{
-		.offset = 0x9d,
-		.size = 1,
-		.activate = 6
-	},
-
-	/* Alternate Speaker and Talkback switches */
-	{
-		.offset = 0x9f,
-		.size = 1,
-		.activate = 10
-	},
-
-	/* Speaker Switching */
-	{
-		.offset = 0xa0,
-		.size = 1,
-		.activate = 10
-	},
-
-	/* Gain Halos */
-	{
-		.offset = 0xa1,
-		.size = 1,
-		.activate = 9
-	},
-
-	/* Gain Halo? */
-	{
-		.offset = 0xa8,
-		.size = 1,
-		.activate = 11
-	},
-	
-	/* Talkback enable flags for each output of internal mixer */
-	{
-		.offset = 0xb0,
-		.size = 2,
-		.activate = 10
-	}
-};
-
-/* proprietary request/response format */
-struct scarlett2_usb_packet {
-	__le32 cmd;
-	__le16 size;
-	__le16 seq;
-	__le32 error;
-	__le32 pad;
-	u8 data[];
-};
 
 /* Decode floating-point value into valid scarlett gain
  * The input floating-point value may be any (including Infs and NaNs)
@@ -1254,7 +1322,7 @@ static char *scarlett2_fmt_port_name(char *out, int len, const struct scarlett2_
 		if (num < ports[port_type].num[direction]) {
 			/* Is there 'special' name found ? */
 			name[0] = '\0';
-			for (port_name = info->port_names; port_name->name != NULL; ++port_name) {
+			for (port_name = info->port_names; (port_name != NULL) && (port_name->name != NULL); ++port_name) {
 				if ((port_name->direction == direction) &&
 				    (port_name->type == port_type) &&
 				    (port_name->index == num)) {
@@ -1401,7 +1469,6 @@ static int scarlett2_usb(
 	mutex_lock(&private->usb_mutex);
 
 	/* build request message and send it */
-
 	scarlett2_fill_request_header(private, req, cmd, req_size);
 
 	if (req_size)
@@ -1419,12 +1486,10 @@ static int scarlett2_usb(
 	}
 
 	/* send a second message to get the response */
-
 	err = scarlett2_usb_rx(dev, private->interface, SCARLETT2_USB_CMD_RESP,
 			       resp, resp_buf_size);
 
 	/* validate the response */
-
 	if (err != resp_buf_size) {
 		usb_audio_err(
 			mixer->chip,
@@ -1493,8 +1558,6 @@ static int scarlett2_usb_set_config(
 	struct usb_mixer_interface *mixer,
 	int config_item_num, int index, int value)
 {
-	const struct scarlett2_config config_item =
-	       scarlett2_config_items[config_item_num];
 	struct {
 		__le32 offset;
 		__le32 bytes;
@@ -1503,26 +1566,35 @@ static int scarlett2_usb_set_config(
 	__le32 req2;
 	int err;
 	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
+	const struct scarlett2_config *config_item = &info->config[config_item_num];
+
+	if (config_item->size <= 0) {
+		usb_audio_warn(mixer->chip, "There is no existing config item %d\n", config_item_num);
+		return -EINVAL;
+	}
 
 	/* Cancel any pending NVRAM save */
 	cancel_delayed_work_sync(&private->work);
 
 	/* Send the configuration parameter data */
-	req.offset = cpu_to_le32(config_item.offset + index * config_item.size);
-	req.bytes = cpu_to_le32(config_item.size);
-	req.value = cpu_to_le32(value);
+	req.offset = cpu_to_le32(config_item->offset + index * config_item->size);
+	req.bytes  = cpu_to_le32(config_item->size);
+	req.value  = cpu_to_le32(value);
 	err = scarlett2_usb(mixer, SCARLETT2_USB_SET_DATA,
-			    &req, sizeof(u32) * 2 + config_item.size,
+			    &req, sizeof(u32) * 2 + config_item->size,
 			    NULL, 0);
 	if (err < 0)
 		return err;
 
 	/* Activate the change */
-	req2 = cpu_to_le32(config_item.activate);
-	err = scarlett2_usb(mixer, SCARLETT2_USB_DATA_CMD,
+	if (config_item->activate > 0) {
+		req2 = cpu_to_le32(config_item->activate);
+		err = scarlett2_usb(mixer, SCARLETT2_USB_DATA_CMD,
 			    &req2, sizeof(req2), NULL, 0);
-	if (err < 0)
-		return err;
+		if (err < 0)
+			return err;
+	}
 
 	/* Schedule the change to be written to NVRAM */
 	schedule_delayed_work(&private->work, msecs_to_jiffies(2000));
@@ -1530,20 +1602,35 @@ static int scarlett2_usb_set_config(
 	return 0;
 }
 
-/* Send a USB message to get data; result placed in *buf */
+/* Send a set of USB messages to get data; result placed in *data */
 static int scarlett2_usb_get(
 	struct usb_mixer_interface *mixer,
-	int offset, void *buf, int size)
+	int offset, void *data, int bytes)
 {
 	struct {
 		__le32 offset;
 		__le32 size;
 	} __packed req;
 
-	req.offset = cpu_to_le32(offset);
-	req.size = cpu_to_le32(size);
-	return scarlett2_usb(mixer, SCARLETT2_USB_GET_DATA,
-			     &req, sizeof(req), buf, size);
+	int i, chunk, err;
+	u8 *buf = (u8 *)data;
+
+	/* Request the config space with fixed-size data chunks */
+	for (i=0; i<bytes; i += chunk) {
+		/* Compute the chunk size */
+		chunk = (bytes - i);
+		if (chunk > SCARLETT2_SW_CONFIG_PACKET_SIZE)
+			chunk = SCARLETT2_SW_CONFIG_PACKET_SIZE;
+
+		/* Request yet another chunk */
+		req.offset = cpu_to_le32(offset + i);
+		req.size = cpu_to_le32(chunk);
+		err = scarlett2_usb(mixer, SCARLETT2_USB_GET_DATA, &req, sizeof(req), &buf[i], chunk);
+		if (err < 0)
+			return err;
+	}
+
+	return 0;
 }
 
 /* Send a USB message to get configuration parameters; result placed in *buf */
@@ -1551,11 +1638,17 @@ static int scarlett2_usb_get_config(
 	struct usb_mixer_interface *mixer,
 	int config_item_num, int count, void *buf)
 {
-	const struct scarlett2_config config_item =
-	       scarlett2_config_items[config_item_num];
-	int size = config_item.size * count;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
+	const struct scarlett2_config *config_item = &info->config[config_item_num];
 
-	return scarlett2_usb_get(mixer, config_item.offset, buf, size);
+	/* No such configuration entry? */
+	if (config_item->size <= 0) {
+		usb_audio_warn(mixer->chip, "Configuration item #%d was not found\n", config_item_num);
+		return -EINVAL;
+	}
+
+	return scarlett2_usb_get(mixer, config_item->offset, buf, config_item->size * count);
 }
 
 /* Send a USB message to get volume status; result placed in *buf */
@@ -2014,13 +2107,13 @@ static int scarlett2_update_line_ctl_switches(struct usb_mixer_interface *mixer)
 	const struct scarlett2_device_info *info = private->info;
 	u8 pad_switches[SCARLETT2_PAD_SWITCH_MAX];
 	u8 level_switches[SCARLETT2_LEVEL_SWITCH_MAX];
-	u8 pow_switch;
+	u8 pow_switch, retain48v;
 
 	int i, err = 0;
 
 	private->line_ctl_updated = 0;
 
-	/* Update pad settings */
+	/* Update PAD settings */
 	if (info->pad_input_count) {
 		err = scarlett2_usb_get_config(
 			mixer,
@@ -2034,7 +2127,7 @@ static int scarlett2_update_line_ctl_switches(struct usb_mixer_interface *mixer)
 			private->pad_switch[i] = !!pad_switches[i];
 	}
 
-	/* Update level settings */
+	/* Update LINE/INST settings */
 	if (info->level_input_count) {
 		err = scarlett2_usb_get_config(
 			mixer,
@@ -2059,6 +2152,18 @@ static int scarlett2_update_line_ctl_switches(struct usb_mixer_interface *mixer)
 
 		for (i = 0; i < info->power_48v_count; i++)
 			private->pow_switch[i] = !! (pow_switch & (1 << i));
+	}
+
+	/* 'Retain 48V switch */
+	if (info->has_retain48v) {
+		err = scarlett2_usb_get_config(
+			mixer,
+			SCARLETT2_CONFIG_RETAIN_48V,
+			1, &retain48v);
+		if (err < 0)
+			return err;
+
+		private->retain48v_switch = !! retain48v;
 	}
 
 	return 0;
@@ -2294,6 +2399,54 @@ static const struct snd_kcontrol_new scarlett2_48v_ctl = {
 	.put  = scarlett2_48v_ctl_put
 };
 
+/* Retain 48V Switch Control */
+static int scarlett2_retain48v_ctl_get(struct snd_kcontrol *kctl,
+				 struct snd_ctl_elem_value *ucontrol)
+{
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+
+	ucontrol->value.enumerated.item[0] = private->retain48v_switch;
+
+	return 0;
+}
+
+
+static int scarlett2_retain48v_ctl_put(struct snd_kcontrol *kctl,
+				 struct snd_ctl_elem_value *ucontrol)
+{
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+
+	int oval, val, err = 0;
+
+	mutex_lock(&private->data_mutex);
+	oval = private->retain48v_switch;
+	val = !!ucontrol->value.integer.value[0];
+
+	if (oval == val)
+		goto unlock;
+
+	private->retain48v_switch = val;
+
+	/* Send switch change to the device */
+	err = scarlett2_usb_set_config(mixer, SCARLETT2_CONFIG_RETAIN_48V, 0, val);
+
+unlock:
+	mutex_unlock(&private->data_mutex);
+	return err;
+}
+
+static const struct snd_kcontrol_new scarlett2_retain48v_ctl = {
+	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
+	.name = "",
+	.info = snd_ctl_boolean_mono_info,
+	.get  = scarlett2_retain48v_ctl_get,
+	.put  = scarlett2_retain48v_ctl_put
+};
+
 /*** Mute/Dim Controls ***/
 
 static int scarlett2_button_ctl_get(struct snd_kcontrol *kctl,
@@ -2475,6 +2628,14 @@ static int scarlett2_add_line_in_ctls(struct usb_mixer_interface *mixer)
 			return err;
 	}
 
+	/* Add 'Retain 48v' control */
+	if (info->has_retain48v) {
+		err = scarlett2_add_new_ctl(mixer, &scarlett2_retain48v_ctl,
+					    0, 1, "Line 48V Retain", NULL);
+		if (err < 0)
+			return err;
+	}
+
 	return 0;
 }
 
@@ -2570,12 +2731,16 @@ static int scarlett2_add_mixer_ctls(struct usb_mixer_interface *mixer)
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	const struct scarlett2_ports *ports = private->info->ports;
 	int err, i, j;
-	int cfg_idx, mix_idx;
+	int cfg_idx, mix_idx, num_inputs, num_outputs;
 	char s[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
 	u32 level;
 
-	int num_inputs = ports[SCARLETT2_PORT_TYPE_MIX].num[SCARLETT2_PORT_OUT];
-	int num_outputs = ports[SCARLETT2_PORT_TYPE_MIX].num[SCARLETT2_PORT_IN];
+	/* Check that device has mixer */
+	if (!private->info->has_mixer)
+		return 0;
+
+	num_inputs = ports[SCARLETT2_PORT_TYPE_MIX].num[SCARLETT2_PORT_OUT];
+	num_outputs = ports[SCARLETT2_PORT_TYPE_MIX].num[SCARLETT2_PORT_IN];
 
 	/* For each mixer */
 	for (i=0; i<num_outputs; ++i) {
@@ -2687,6 +2852,10 @@ static int scarlett2_init_mux(struct usb_mixer_interface *mixer)
 	int port, err;
 	char name[SNDRV_CTL_ELEM_ID_NAME_MAXLEN];
 
+	/* Check that device has MUX */
+	if (!private->info->has_mux)
+		return 0;
+
 	/* Read MUX settings */
 	err = scarlett2_usb_get_mux(mixer);
 	if (err < 0)
@@ -2755,6 +2924,12 @@ static const struct snd_kcontrol_new scarlett2_meter_ctl = {
 
 static int scarlett2_add_meter_ctl(struct usb_mixer_interface *mixer)
 {
+	struct scarlett2_mixer_data *private = mixer->private_data;
+
+	/** Ensure the device has level meters */
+	if (!private->info->has_meters)
+		return 0;
+
 	return scarlett2_add_new_ctl(mixer, &scarlett2_meter_ctl,
 				     0, SCARLETT2_NUM_METERS,
 				     "Level Meter", NULL);
@@ -2813,6 +2988,7 @@ static int scarlett2_add_msd_ctl(struct usb_mixer_interface *mixer)
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	const struct scarlett2_device_info *info = private->info;
 
+	/* Check that device has MSD mode */
 	if (!info->has_msd_mode)
 		return 0;
 
@@ -3187,41 +3363,17 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 	const struct scarlett2_ports *ports = info->ports;
 	int num_line_out =
 		ports[SCARLETT2_PORT_TYPE_ANALOGUE].num[SCARLETT2_PORT_OUT];
-	u8 level_switches[SCARLETT2_LEVEL_SWITCH_MAX];
-	u8 pad_switches[SCARLETT2_PAD_SWITCH_MAX];
 	u8 air_switches[SCARLETT2_AIR_SWITCH_MAX];
 	u8 msd_switch;
 	u8 speaker_switching, speaker_switch;
-	u8 pow_switch;
 	__le16 mix_talkbacks;
 	struct scarlett2_usb_volume_status volume_status;
 	int err, i, num_mixes, val;
 
-	/* INST buttons */
-	if (info->level_input_count) {
-		err = scarlett2_usb_get_config(
-			mixer,
-			SCARLETT2_CONFIG_LEVEL_SWITCH,
-			info->level_input_count,
-			level_switches);
-		if (err < 0)
-			return err;
-		for (i = 0; i < info->level_input_count; i++)
-			private->level_switch[i] = level_switches[i];
-	}
-
-	/* PAD buttons */
-	if (info->pad_input_count) {
-		err = scarlett2_usb_get_config(
-			mixer,
-			SCARLETT2_CONFIG_PAD_SWITCH,
-			info->pad_input_count,
-			pad_switches);
-		if (err < 0)
-			return err;
-		for (i = 0; i < info->pad_input_count; i++)
-			private->pad_switch[i] = pad_switches[i];
-	}
+	/* LINE/INST, PAD, 48V power, 48V retain */
+	err = scarlett2_update_line_ctl_switches(mixer);
+	if (err < 0)
+		return err;
 
 	/* AIR input settings */
 	if (info->air_input_count) {
@@ -3233,20 +3385,7 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 		if (err < 0)
 			return err;
 		for (i = 0; i < info->air_input_count; i++)
-			private->air_switch[i] = air_switches[i];
-	}
-
-	/* Phantom power settings */
-	if (info->power_48v_count) {
-		err = scarlett2_usb_get_config(
-			mixer,
-			SCARLETT2_CONFIG_48V_SWITCH,
-			1, &pow_switch);
-		if (err < 0)
-			return err;
-		
-		for (i = 0; i < info->power_48v_count; i++)
-			private->pow_switch[i] = !! (pow_switch & (1 << i));
+			private->air_switch[i] = !! air_switches[i];
 	}
 
 	/* Mass Storage Device (MSD) mode */
@@ -3301,31 +3440,34 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 			private->mix_talkback[i] = !!(val & (1 << i));
 	}
 
-	err = scarlett2_usb_get_volume_status(mixer, &volume_status);
-	if (err < 0)
-		return err;
+	/* Hardware-controlled volume */
+	if (info->has_hw_volume) {
+		err = scarlett2_usb_get_volume_status(mixer, &volume_status);
+		if (err < 0)
+			return err;
 
-	private->master_vol = clamp(
-		volume_status.master_vol + SCARLETT2_VOLUME_BIAS,
-		0, SCARLETT2_VOLUME_BIAS);
+		private->master_vol = clamp(
+			volume_status.master_vol + SCARLETT2_VOLUME_BIAS,
+			0, SCARLETT2_VOLUME_BIAS);
 
-	for (i = 0; i < num_line_out; i++) {
-		int volume;
+		for (i = 0; i < num_line_out; i++) {
+			int volume;
 
-		private->vol_sw_hw_switch[i] =
-			info->line_out_hw_vol
-				&& volume_status.sw_hw_switch[i];
+			private->vol_sw_hw_switch[i] =
+				info->line_out_hw_vol
+					&& volume_status.sw_hw_switch[i];
 
-		volume = private->vol_sw_hw_switch[i]
-			   ? volume_status.master_vol
-			   : volume_status.sw_vol[i];
-		volume = clamp(volume + SCARLETT2_VOLUME_BIAS,
-			       0, SCARLETT2_VOLUME_BIAS);
-		private->vol[i] = volume;
+			volume = private->vol_sw_hw_switch[i]
+				   ? volume_status.master_vol
+				   : volume_status.sw_vol[i];
+			volume = clamp(volume + SCARLETT2_VOLUME_BIAS,
+				       0, SCARLETT2_VOLUME_BIAS);
+			private->vol[i] = volume;
+		}
+
+		for (i = 0; i < info->button_count; i++)
+			private->buttons[i] = !!volume_status.buttons[i];
 	}
-
-	for (i = 0; i < info->button_count; i++)
-		private->buttons[i] = !!volume_status.buttons[i];
 
 	return 0;
 }
@@ -3334,9 +3476,15 @@ static int scarlett2_read_software_configs(struct usb_mixer_interface *mixer)
 {
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	const struct scarlett2_ports *ports = private->info->ports;
-	int i, chunk, err;
+	int err;
 	__le16 sw_cfg_size;
-	int num_line_out = ports[SCARLETT2_PORT_TYPE_ANALOGUE].num[SCARLETT2_PORT_OUT];
+	int num_line_out;
+
+	/* Check that device has software configuration */
+	if (!private->info->has_sw_config)
+		return 0;
+
+	num_line_out = ports[SCARLETT2_PORT_TYPE_ANALOGUE].num[SCARLETT2_PORT_OUT];
 
 	/* Currently it is static constant, maybe it will be properly detected in the future */
 	private->sw_cfg_offset = SCARLETT2_SW_CONFIG_BASE;
@@ -3369,19 +3517,7 @@ static int scarlett2_read_software_configs(struct usb_mixer_interface *mixer)
 		private->sw_cfg_mixer_size   = 0;
 
 	/* Request the software config with fixed-size data chunks */
-	for (i=0; i<private->sw_cfg_size; ) {
-		chunk = (private->sw_cfg_size - i);
-		if (chunk > SCARLETT2_SW_CONFIG_PACKET_SIZE)
-			chunk = SCARLETT2_SW_CONFIG_PACKET_SIZE;
-
-		/* Request yet another chunk */
-		err = scarlett2_usb_get(mixer, private->sw_cfg_offset + i, &private->sw_cfg_data[i], chunk);
-		if (err < 0)
-			return err;
-		i += chunk;
-	}
-
-	return err;
+	return scarlett2_usb_get(mixer, private->sw_cfg_offset, private->sw_cfg_data, private->sw_cfg_size);
 }
 
 static int scarlett2_commit_software_config(
