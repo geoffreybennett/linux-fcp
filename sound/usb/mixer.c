@@ -50,7 +50,7 @@
 #include "mixer_quirks.h"
 #include "power.h"
 
-#define MAX_ID_ELEMS	512
+#define MAX_ID_ELEMS	1024
 
 struct usb_audio_term {
 	int id;
