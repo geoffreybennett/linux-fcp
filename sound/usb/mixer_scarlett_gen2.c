@@ -46,6 +46,8 @@
  * Scarlett 2i2 Gen 3 support added in November 2020 (thanks to Alexander
  * Vorona for taking 2i2 USB protocol dumps).
  *
+ * Scarlett Solo Gen 3 support added in January 2021 (thanks to Valeriy
+ * Chernoivanov who provided USB identifier of device)
  *
  * This ALSA mixer gives access to (model-dependent):
  *  - input, output, mixer-matrix muxes
@@ -350,6 +352,7 @@ struct scarlett2_device_info {
 	u8 line_out_hw_vol; /* line out hw volume is sw controlled */
 	u8 button_count; /* number of buttons */
 	u8 level_input_count; /* inputs with level selectable */
+	u8 level_input_offset; /* inputs with level selectable - UI numbering offset */
 	u8 level_input_bitmask; /* input levels are present as bitmask */
 	u8 pad_input_count; /* inputs with pad selectable */
 	u8 air_input_count; /* inputs with air selectable */
@@ -523,7 +526,7 @@ static const struct scarlett2_config scarlett2_pro_config_items[SCARLETT2_CONFIG
 };
 
 /*
- * Configuration space for home segment devices like Scarlett 2i2
+ * Configuration space for home segment devices like Scarlett 2i2 and Scarlett Solo
  */
 static const struct scarlett2_config scarlett2_home_config_items[SCARLETT2_CONFIG_COUNT] = {
 
@@ -833,6 +836,67 @@ static const struct scarlett2_device_info s18i20_gen2_info = {
 	.config = scarlett2_pro_config_items
 };
 
+static const struct scarlett2_port_name ssolo_gen3_port_names[] = {
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Headphones L" },
+	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Headphones R" },
+	{ -1, -1, -1, NULL }
+};
+
+static const struct scarlett2_device_info ssolo_gen3_info = {
+	.usb_id = USB_ID(0x1235, 0x8211),
+
+	/* Has mass-storage device (MSD) mode */
+	//.has_msd_mode = 1,
+
+	/* The first two analogue inputs can be switched between line
+	 * and instrument levels.
+	 */
+	.level_input_count = 1,
+	.level_input_offset = 1,
+	.level_input_bitmask = 1,
+
+	/* The first two analogue inputs have an optional "air" feature. */
+	.air_input_count = 1,
+	.air_input_bitmask = 1,
+
+	/* The device has 'Direct Monitor' feature */
+	.has_direct_monitor = 1,
+
+	/* One 48V phantom power switch */
+	.power_48v_count = 1,
+
+	/* Has a 'Retain 48V' switch */
+	.has_retain48v = 1,
+
+	/* 26 bytes configuration space */
+	.config_size = 29,
+
+	/* Number of gain halos */
+	.gain_halos_count = 2,
+
+	.config = scarlett2_home_config_items,
+
+	.port_names = ssolo_gen3_port_names,
+
+	.ports = {
+		[SCARLETT2_PORT_TYPE_ANALOGUE] = {
+			.id = SCARLETT2_PORT_ID_ANALOGUE,
+			.num = { 2, 2, 2, 2, 2 },
+			.src_descr = "Analogue In %02d",
+			.src_num_offset = 1,
+			.dst_descr = "Analogue Out %02d"
+		},
+		[SCARLETT2_PORT_TYPE_PCM] = {
+			.id = SCARLETT2_PORT_ID_PCM,
+			.num = { 2, 2, 2, 2, 2 },
+			.src_descr = "PCM In %02d",
+			.src_num_offset = 1,
+			.dst_descr = "PCM Out %02d"
+		},
+	},
+};
+
+
 static const struct scarlett2_port_name s2i2_gen3_port_names[] = {
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 0, "Headphones L" },
 	{ SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, 1, "Headphones R" },
@@ -856,7 +920,7 @@ static const struct scarlett2_device_info s2i2_gen3_info = {
 	.air_input_bitmask = 1,
 
 	/* The device has 'Direct Monitor' feature */
-	.has_direct_monitor = 1,
+	.has_direct_monitor = 2,
 
 	/* One 48V phantom power switch */
 	.power_48v_count = 1,
@@ -1334,6 +1398,7 @@ static const struct scarlett2_device_info *scarlett2_supported_devices[] = {
 	&s18i20_gen2_info,
 
 	/* Supported Gen3 devices */
+	&ssolo_gen3_info,
 	&s2i2_gen3_info,
 	&s4i4_gen3_info,
 	&s8i6_gen3_info,
@@ -2665,7 +2730,7 @@ static int scarlett2_update_line_ctl_switches(struct usb_mixer_interface *mixer)
 	u8 air_switches[SCARLETT2_AIR_SWITCH_MAX];
 	u8 level_switches[SCARLETT2_LEVEL_SWITCH_MAX];
 	u8 pow_switch, retain48v;
-	int i, err = 0;
+	int i, index, err = 0;
 
 	/* Check for re-entrance */
 	if (!private->line_ctl_updated)
@@ -2708,8 +2773,10 @@ static int scarlett2_update_line_ctl_switches(struct usb_mixer_interface *mixer)
 		if (err < 0)
 			return err;
 
-		for (i = 0; i < info->level_input_count; i++)
-			private->level_switch[i] = !! ((info->level_input_bitmask) ? level_switches[0] & (1 << i) : level_switches[i]);
+		for (i = 0; i < info->level_input_count; i++) {
+			index = i + info->level_input_offset;
+			private->level_switch[i] = !! ((info->level_input_bitmask) ? level_switches[0] & (1 << index) : level_switches[index]);
+		}
 	}
 
 	/* Update phantom power settings */
@@ -2794,7 +2861,7 @@ static int scarlett2_level_enum_ctl_put(struct snd_kcontrol *kctl,
 	if (info->level_input_bitmask) {
 		val = 0;
 		for (index = 0; index < info->level_input_count; ++index)
-			val |= private->level_switch[index] << index;
+			val |= private->level_switch[index] << (index + info->level_input_offset);
 		index = 0;
 	}
 
@@ -3346,7 +3413,7 @@ static int scarlett2_add_line_in_ctls(struct usb_mixer_interface *mixer)
 
 	/* Add input level (line/inst) controls */
 	for (i = 0; i < info->level_input_count; i++) {
-		port = scarlett2_get_port_num(info->ports, SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, i);
+		port = scarlett2_get_port_num(info->ports, SCARLETT2_PORT_OUT, SCARLETT2_PORT_TYPE_ANALOGUE, i + info->level_input_offset);
 		scarlett2_fmt_port_name(s, SNDRV_CTL_ELEM_ID_NAME_MAXLEN, "%s Mode Switch", info, SCARLETT2_PORT_IN, port);
 		err = scarlett2_add_new_ctl(mixer, &scarlett2_level_enum_ctl,
 					    i, 1, s, &private->level_ctls[i]);
@@ -4171,7 +4238,10 @@ static int scarlett2_update_speaker_switch_enum_ctl(struct usb_mixer_interface *
 			return err;
 
 		/* update direct monitor state */
-		private->direct_monitor_switch = (speaker_switching < 3) ? speaker_switching : 0;
+		if (info->has_direct_monitor > 1)
+			private->direct_monitor_switch = (speaker_switching < 3) ? speaker_switching : 0;
+		else
+			private->direct_monitor_switch = !! speaker_switching;
 	}
 
 	/* Reset the flag AFTER values have been retrieved */
@@ -4193,11 +4263,21 @@ static int scarlett2_speaker_switch_enum_ctl_info(
 static int scarlett2_direct_monitor_switch_enum_ctl_info(
 	struct snd_kcontrol *kctl, struct snd_ctl_elem_info *uinfo)
 {
-	static const char *const values[3] = {
+	struct usb_mixer_elem_info *elem = kctl->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
+
+	static const char *const mono_values[2] = {
+		"Off", "On"
+	};
+	static const char *const stereo_values[3] = {
 		"Off", "Mono", "Stereo"
 	};
 
-	return snd_ctl_enum_info(uinfo, 1, 3, values);
+	return (info->has_direct_monitor > 1) ?
+		snd_ctl_enum_info(uinfo, 1, 3, stereo_values) :
+		snd_ctl_enum_info(uinfo, 1, 2, mono_values);
 }
 
 static int scarlett2_speaker_switch_enum_ctl_get(
@@ -4307,6 +4387,7 @@ static int scarlett2_direct_monitor_switch_enum_ctl_put(
 	struct usb_mixer_elem_info *elem = kctl->private_data;
 	struct usb_mixer_interface *mixer = elem->head.mixer;
 	struct scarlett2_mixer_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
 	int old_val, val, err = 0;
 
 	mutex_lock(&private->data_mutex);
@@ -4314,7 +4395,7 @@ static int scarlett2_direct_monitor_switch_enum_ctl_put(
 
 	old_val = private->direct_monitor_switch;
 	val = ucontrol->value.integer.value[0];
-	val = clamp(val, 0, 2);
+	val = (info->has_direct_monitor > 1) ? clamp(val, 0, 2) : !! val;
 	if (old_val == val)
 		goto unlock;
 
