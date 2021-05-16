@@ -458,10 +458,12 @@ static int scarlett2_get_port_start_num(const struct scarlett2_ports *ports,
 #define SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE 0x00200000
 
 /* Commands for sending/receiving requests/responses */
+#define SCARLETT2_USB_CMD_INIT 0
 #define SCARLETT2_USB_CMD_REQ  2
 #define SCARLETT2_USB_CMD_RESP 3
 
-#define SCARLETT2_USB_INIT_SEQ  0x00000000
+#define SCARLETT2_USB_INIT_1    0x00000000
+#define SCARLETT2_USB_INIT_2    0x00000002
 #define SCARLETT2_USB_GET_METER 0x00001001
 #define SCARLETT2_USB_SET_MIX   0x00002002
 #define SCARLETT2_USB_SET_MUX   0x00003002
@@ -653,14 +655,18 @@ static int scarlett2_usb(
 	if (err != resp_buf_size) {
 		usb_audio_err(
 			mixer->chip,
-			"Scarlett Gen 2 USB response result cmd %x was %d\n",
-			cmd, err);
+			"Scarlett Gen 2 USB response result cmd %x was %d "
+			"expected %d\n",
+			cmd, err, resp_buf_size);
 		err = -EINVAL;
 		goto unlock;
 	}
 
+	/* cmd/seq/size should match except when initialising
+	 * seq sent = 1, response = 0
+	 */
 	if (resp->cmd != req->cmd ||
-	    resp->seq != req->seq ||
+	    (resp->seq != req->seq && (req->seq != 1 || resp->seq != 0)) ||
 	    resp_size != le16_to_cpu(resp->size) ||
 	    resp->error ||
 	    resp->pad) {
@@ -678,7 +684,7 @@ static int scarlett2_usb(
 		goto unlock;
 	}
 
-	if (resp_size > 0)
+	if (resp_data && resp_size > 0)
 		memcpy(resp_data, resp->data, resp_size);
 
 unlock:
@@ -1837,6 +1843,51 @@ static int scarlett2_find_fc_interface(struct usb_device *dev,
 	return -EINVAL;
 }
 
+/* Cargo cult proprietary initialisation sequence */
+static int scarlett2_usb_init(struct usb_mixer_interface *mixer)
+{
+	struct snd_usb_audio *chip = mixer->chip;
+	struct usb_device *dev = chip->dev;
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	u16 buf_size = sizeof(struct scarlett2_usb_packet) + 8;
+	struct scarlett2_usb_packet *buf;
+	int err;
+
+	if (usb_pipe_type_check(dev, usb_sndctrlpipe(dev, 0)))
+		return -EINVAL;
+
+	buf = kmalloc(buf_size, GFP_KERNEL);
+	if (!buf) {
+		err = -ENOMEM;
+		goto error;
+	}
+
+	// step 0
+	err = scarlett2_usb_rx(dev, private->bInterfaceNumber,
+			       SCARLETT2_USB_CMD_INIT,
+			       buf, buf_size);
+	if (err < 0)
+		goto error;
+
+	// step 1
+	private->scarlett2_seq = 1;
+	err = scarlett2_usb(mixer, SCARLETT2_USB_INIT_1, NULL, 0, NULL, 0);
+	if (err < 0)
+		goto error;
+
+	// step 2
+	private->scarlett2_seq = 1;
+	err = scarlett2_usb(mixer, SCARLETT2_USB_INIT_2, NULL, 0, NULL, 84);
+	if (err < 0)
+		goto error;
+
+	err = 0;
+
+error:
+	kfree(buf);
+	return err;
+}
+
 /* Initialise private data, routing, sequence number */
 static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 				  const struct scarlett2_device_info *info)
@@ -1868,8 +1919,7 @@ static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 	/* Setup default routing */
 	scarlett2_init_routing(private->mux, info->ports);
 
-	/* Initialise the sequence number used for the proprietary commands */
-	return scarlett2_usb(mixer, SCARLETT2_USB_INIT_SEQ, NULL, 0, NULL, 0);
+	return 0;
 }
 
 /* Read line-in config and line-out volume settings on start */
@@ -2045,6 +2095,11 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer,
 
 	/* Initialise private data, routing, sequence number */
 	err = scarlett2_init_private(mixer, info);
+	if (err < 0)
+		return err;
+
+	/* Send proprietary USB initialisation sequence */
+	err = scarlett2_usb_init(mixer);
 	if (err < 0)
 		return err;
 
