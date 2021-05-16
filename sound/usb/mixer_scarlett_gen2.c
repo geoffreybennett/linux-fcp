@@ -567,8 +567,6 @@ struct scarlett2_usb_packet {
 	u8 data[];
 };
 
-#define SCARLETT2_USB_PACKET_LEN (sizeof(struct scarlett2_usb_packet))
-
 static void scarlett2_fill_request_header(struct scarlett2_mixer_data *private,
 					  struct scarlett2_usb_packet *req,
 					  u32 cmd, u16 req_size)
@@ -591,8 +589,8 @@ static int scarlett2_usb(
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	u16 req_buf_size = sizeof(struct scarlett2_usb_packet) + req_size;
 	u16 resp_buf_size = sizeof(struct scarlett2_usb_packet) + resp_size;
-	struct scarlett2_usb_packet *req = NULL, *resp = NULL;
-	int err = 0;
+	struct scarlett2_usb_packet *req, *resp = NULL;
+	int err;
 
 	req = kmalloc(req_buf_size, GFP_KERNEL);
 	if (!req) {
@@ -891,10 +889,6 @@ static int scarlett2_usb_set_mux(struct usb_mixer_interface *mixer)
 							ports, private->mux[j]
 						) << 12
 					  );
-
-			/* skip private->mux[j] entries not output */
-			j += ports[port_type].num[SCARLETT2_PORT_OUT] -
-			     ports[port_type].num[port_dir_rate];
 		}
 
 		err = scarlett2_usb(mixer, SCARLETT2_USB_SET_MUX,
