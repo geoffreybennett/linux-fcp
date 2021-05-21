@@ -32,6 +32,10 @@
  * Scarlett 6i6 support added in June 2019 (thanks to Martin Wittmann
  * for providing usbmon output and testing).
  *
+ * Support for loading mixer volume and mux configuration from the
+ * interface during driver initialisation added in May 2021 (thanks to
+ * Vladimir Sadovnikov for figuring out how).
+ *
  * This ALSA mixer gives access to:
  *  - input, output, mixer-matrix muxes
  *  - 18x10 mixer-matrix gain stages
@@ -232,6 +236,7 @@ struct scarlett2_mixer_data {
 	__le16 wMaxPacketSize;
 	__u8 bInterval;
 	int num_mux_srcs;
+	int num_mux_dsts;
 	u16 scarlett2_seq;
 	u8 vol_updated;
 	u8 master_vol;
@@ -468,6 +473,7 @@ static int scarlett2_get_port_start_num(const struct scarlett2_ports *ports,
 #define SCARLETT2_USB_GET_METER 0x00001001
 #define SCARLETT2_USB_GET_MIX   0x00002001
 #define SCARLETT2_USB_SET_MIX   0x00002002
+#define SCARLETT2_USB_GET_MUX   0x00003001
 #define SCARLETT2_USB_SET_MUX   0x00003002
 #define SCARLETT2_USB_GET_DATA  0x00800000
 #define SCARLETT2_USB_SET_DATA  0x00800001
@@ -885,6 +891,93 @@ static u32 scarlett2_mux_src_num_to_id(const struct scarlett2_ports *ports,
 	}
 
 	/* Oops */
+	return 0;
+}
+
+/* Convert a hardware ID to a port number index */
+static u32 scarlett2_mux_id_to_num(const struct scarlett2_ports *ports,
+				   int direction,
+				   u32 id)
+{
+	int port_type;
+	int port_num = 0;
+
+	for (port_type = 0;
+	     port_type < SCARLETT2_PORT_TYPE_COUNT;
+	     port_type++) {
+		struct scarlett2_ports port = ports[port_type];
+		int count = port.num[direction];
+
+		if (id >= port.id && id < port.id + count)
+			return port_num + id - port.id;
+		port_num += count;
+	}
+
+	/* Oops */
+	return -1;
+}
+
+static void scarlett2_usb_populate_mux(struct scarlett2_mixer_data *private,
+				       u32 mux_entry)
+{
+	const struct scarlett2_device_info *info = private->info;
+	const struct scarlett2_ports *ports = info->ports;
+
+	int src_idx, dst_idx;
+
+	dst_idx = scarlett2_mux_id_to_num(ports, SCARLETT2_PORT_OUT,
+					  mux_entry & 0xFFF);
+	if (dst_idx < 0)
+		return;
+
+	if (dst_idx >= private->num_mux_dsts) {
+		usb_audio_err(private->mixer->chip,
+			"BUG: scarlett2_mux_id_to_num(%06x, OUT): %d >= %d",
+			mux_entry, dst_idx, private->num_mux_dsts);
+		return;
+	}
+
+	src_idx = scarlett2_mux_id_to_num(ports, SCARLETT2_PORT_IN,
+					  mux_entry >> 12);
+	if (src_idx < 0)
+		return;
+
+	if (src_idx >= private->num_mux_srcs) {
+		usb_audio_err(private->mixer->chip,
+			"BUG: scarlett2_mux_id_to_num(%06x, IN): %d >= %d",
+			mux_entry, src_idx, private->num_mux_srcs);
+		return;
+	}
+
+	private->mux[dst_idx] = src_idx;
+}
+
+/* Send USB message to get mux inputs and then populate private->mux[] */
+static int scarlett2_usb_get_mux(struct usb_mixer_interface *mixer)
+{
+	struct scarlett2_mixer_data *private = mixer->private_data;
+	int count = private->num_mux_dsts;
+	int err, i;
+
+	struct {
+		__le16 num;
+		__le16 count;
+	} __packed req;
+
+	__le32 data[SCARLETT2_MUX_MAX];
+
+	req.num = 0;
+	req.count = cpu_to_le16(count);
+
+	err = scarlett2_usb(mixer, SCARLETT2_USB_GET_MUX,
+			    &req, sizeof(req),
+			    data, count * sizeof(u32));
+	if (err < 0)
+		return err;
+
+	for (i = 0; i < count; i++)
+		scarlett2_usb_populate_mux(private, le32_to_cpu(data[i]));
+
 	return 0;
 }
 
@@ -1791,69 +1884,20 @@ static void scarlett2_private_suspend(struct usb_mixer_interface *mixer)
 
 /*** Initialisation ***/
 
-static int scarlett2_count_mux_srcs(const struct scarlett2_ports *ports)
+static void scarlett2_count_mux_io(const struct scarlett2_ports *ports,
+				   struct scarlett2_mixer_data *private)
 {
-	int port_type, count = 0;
+	int port_type, srcs = 0, dsts = 0;
 
 	for (port_type = 0;
 	     port_type < SCARLETT2_PORT_TYPE_COUNT;
-	     port_type++)
-		count += ports[port_type].num[SCARLETT2_PORT_IN];
-
-	return count;
-}
-
-/* Default routing connects PCM outputs and inputs to Analogue,
- * S/PDIF, then ADAT
- */
-static void scarlett2_init_routing(u8 *mux,
-				   const struct scarlett2_ports *ports)
-{
-	int i, input_num, input_count, port_type;
-	int output_num, output_count, port_type_connect_num;
-
-	static const int connect_order[] = {
-		SCARLETT2_PORT_TYPE_ANALOGUE,
-		SCARLETT2_PORT_TYPE_SPDIF,
-		SCARLETT2_PORT_TYPE_ADAT,
-		-1
-	};
-
-	/* Assign PCM inputs (routing outputs) */
-	output_num = scarlett2_get_port_start_num(ports,
-						  SCARLETT2_PORT_OUT,
-						  SCARLETT2_PORT_TYPE_PCM);
-	output_count = ports[SCARLETT2_PORT_TYPE_PCM].num[SCARLETT2_PORT_OUT];
-
-	for (port_type = connect_order[port_type_connect_num = 0];
-	     port_type >= 0;
-	     port_type = connect_order[++port_type_connect_num]) {
-		input_num = scarlett2_get_port_start_num(
-			ports, SCARLETT2_PORT_IN, port_type);
-		input_count = ports[port_type].num[SCARLETT2_PORT_IN];
-		for (i = 0;
-		     i < input_count && output_count;
-		     i++, output_count--)
-			mux[output_num++] = input_num++;
+	     port_type++) {
+		srcs += ports[port_type].num[SCARLETT2_PORT_IN];
+		dsts += ports[port_type].num[SCARLETT2_PORT_OUT_44];
 	}
 
-	/* Assign PCM outputs (routing inputs) */
-	input_num = scarlett2_get_port_start_num(ports,
-						 SCARLETT2_PORT_IN,
-						 SCARLETT2_PORT_TYPE_PCM);
-	input_count = ports[SCARLETT2_PORT_TYPE_PCM].num[SCARLETT2_PORT_IN];
-
-	for (port_type = connect_order[port_type_connect_num = 0];
-	     port_type >= 0;
-	     port_type = connect_order[++port_type_connect_num]) {
-		output_num = scarlett2_get_port_start_num(
-			ports, SCARLETT2_PORT_OUT, port_type);
-		output_count = ports[port_type].num[SCARLETT2_PORT_OUT];
-		for (i = 0;
-		     i < output_count && input_count;
-		     i++, input_count--)
-			mux[output_num++] = input_num++;
-	}
+	private->num_mux_srcs = srcs;
+	private->num_mux_dsts = dsts;
 }
 
 /* Look through the interface descriptors for the Focusrite Control
@@ -1939,7 +1983,6 @@ static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 {
 	struct scarlett2_mixer_data *private =
 		kzalloc(sizeof(struct scarlett2_mixer_data), GFP_KERNEL);
-	int err;
 
 	if (!private)
 		return -ENOMEM;
@@ -1953,18 +1996,11 @@ static int scarlett2_init_private(struct usb_mixer_interface *mixer,
 	mixer->private_suspend = scarlett2_private_suspend;
 
 	private->info = info;
-	private->num_mux_srcs = scarlett2_count_mux_srcs(info->ports);
+	scarlett2_count_mux_io(info->ports, private);
 	private->scarlett2_seq = 0;
 	private->mixer = mixer;
 
-	err = scarlett2_find_fc_interface(mixer->chip->dev, private);
-	if (err < 0)
-		return err;
-
-	/* Setup default routing */
-	scarlett2_init_routing(private->mux, info->ports);
-
-	return 0;
+	return scarlett2_find_fc_interface(mixer->chip->dev, private);
 }
 
 /* Read configuration from the interface on start */
@@ -2038,7 +2074,7 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 			return err;
 	}
 
-	return 0;
+	return scarlett2_usb_get_mux(mixer);
 }
 
 /* Notify on volume change */
