@@ -456,20 +456,21 @@ static int scarlett2_get_port_start_num(const struct scarlett2_ports *ports,
 #define SCARLETT2_USB_INTERRUPT_INTERVAL 3
 
 /* Interrupt flags for volume and mute/dim button changes */
-#define SCARLETT2_USB_INTERRUPT_VOL_CHANGE 0x400000
-#define SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE 0x200000
+#define SCARLETT2_USB_INTERRUPT_VOL_CHANGE    0x00400000
+#define SCARLETT2_USB_INTERRUPT_BUTTON_CHANGE 0x00200000
 
 /* Commands for sending/receiving requests/responses */
-#define SCARLETT2_USB_VENDOR_SPECIFIC_CMD_REQ 2
+#define SCARLETT2_USB_VENDOR_SPECIFIC_CMD_REQ  2
 #define SCARLETT2_USB_VENDOR_SPECIFIC_CMD_RESP 3
 
-#define SCARLETT2_USB_INIT_SEQ 0x00000000
-#define SCARLETT2_USB_GET_METER_LEVELS 0x00001001
-#define SCARLETT2_USB_SET_MIX 0x00002002
-#define SCARLETT2_USB_SET_MUX 0x00003002
-#define SCARLETT2_USB_GET_DATA 0x00800000
-#define SCARLETT2_USB_SET_DATA 0x00800001
-#define SCARLETT2_USB_DATA_CMD 0x00800002
+#define SCARLETT2_USB_INIT_SEQ  0x00000000
+#define SCARLETT2_USB_GET_METER 0x00001001
+#define SCARLETT2_USB_SET_MIX   0x00002002
+#define SCARLETT2_USB_SET_MUX   0x00003002
+#define SCARLETT2_USB_GET_DATA  0x00800000
+#define SCARLETT2_USB_SET_DATA  0x00800001
+#define SCARLETT2_USB_DATA_CMD  0x00800002
+
 #define SCARLETT2_USB_CONFIG_SAVE 6
 
 #define SCARLETT2_USB_VOLUME_STATUS_OFFSET 0x31
@@ -788,7 +789,7 @@ static int scarlett2_usb_get_volume_status(
  * (values obtained from private->mix[])
  */
 static int scarlett2_usb_set_mix(struct usb_mixer_interface *mixer,
-				     int mix_num)
+				 int mix_num)
 {
 	struct scarlett2_mixer_data *private = mixer->private_data;
 	const struct scarlett2_device_info *info = private->info;
@@ -921,7 +922,7 @@ static int scarlett2_usb_get_meter_levels(struct usb_mixer_interface *mixer,
 	req.pad = 0;
 	req.num_meters = cpu_to_le16(SCARLETT2_NUM_METERS);
 	req.magic = cpu_to_le32(SCARLETT2_USB_METER_LEVELS_GET_MAGIC);
-	err = scarlett2_usb(mixer, SCARLETT2_USB_GET_METER_LEVELS,
+	err = scarlett2_usb(mixer, SCARLETT2_USB_GET_METER,
 			    &req, sizeof(req), resp, sizeof(resp));
 	if (err < 0)
 		return err;
