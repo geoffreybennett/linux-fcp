@@ -2087,6 +2087,9 @@ static void scarlett2_mixer_interrupt_vol_change(
 		ports[SCARLETT2_PORT_TYPE_ANALOGUE].num[SCARLETT2_PORT_OUT];
 	int i;
 
+	if (!private->info->line_out_hw_vol)
+		return;
+
 	private->vol_updated = 1;
 
 	snd_ctl_notify(mixer->chip->card, SNDRV_CTL_EVENT_MASK_VALUE,
@@ -2222,12 +2225,10 @@ int snd_scarlett_gen2_controls_create(struct usb_mixer_interface *mixer,
 	if (err < 0)
 		return err;
 
-	/* Set up the interrupt polling if there are hardware buttons */
-	if (info->button_count) {
-		err = scarlett2_mixer_status_create(mixer);
-		if (err < 0)
-			return err;
-	}
+	/* Set up interrupt polling */
+	err = scarlett2_mixer_status_create(mixer);
+	if (err < 0)
+		return err;
 
 	return 0;
 }
