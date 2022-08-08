@@ -6,7 +6,7 @@ contains requirements for building and running the Kernel,
 and information about the problems may result by upgrading the kernel.
 
 Run ./Documentation/process/check_version.sh 
-to verify requirements.
+to quickly verify requirements.
 make executable: `chmod +x ./check_version.sh` then `./check_version.sh`
 
 
