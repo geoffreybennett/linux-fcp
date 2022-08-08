@@ -1,6 +1,6 @@
 #!/bin/bash
 # v1.00
-# To execute: save and `chmod +x ./check_version.sh` then `./check_version.sh`
+# To execute: `chmod +x ./check_version.sh` then `./check_version.sh`
 # this can be much better, its a "make the job" version.
 # for clean install Linux users,
 # manual check all versions its crazy.!
