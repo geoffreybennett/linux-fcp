@@ -2,6 +2,11 @@
 # v1.00
 # To execute: save and `chmod +x ./check_version.sh` then `./check_version.sh`
 # this can be much better, its a "make the job" version.
+# for clean install Linux users,
+# manual check all versions its crazy.!
+# this simple .sh will show required version vs. installed
+# will give .sh error if Not installed.
+# But Is Not an error of the .sh
 
 echo -e "========================================================="
 echo -e "Program \tMinimal version "
