@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  *   Focusrite Scarlett 2 Protocol Driver for ALSA
- *   (including Scarlett 2nd Gen, 3rd Gen, Clarett USB, and Clarett+
- *   series products)
+ *   (including Scarlett 2nd Gen, 3rd Gen, 4th Gen, Clarett USB, and
+ *   Clarett+ series products)
  *
  *   Supported models:
  *   - 6i6/18i8/18i20 Gen 2
  *   - Solo/2i2/4i4/8i6/18i8/18i20 Gen 3
+ *   - Solo/2i2/4i4 Gen 4
  *   - Clarett 2Pre/4Pre/8Pre USB
  *   - Clarett+ 2Pre/4Pre/8Pre
  *
@@ -302,9 +303,19 @@ struct scarlett2_notification {
 static void scarlett2_notify_sync(struct usb_mixer_interface *mixer);
 static void scarlett2_notify_dim_mute(struct usb_mixer_interface *mixer);
 static void scarlett2_notify_monitor(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_volume(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_input_level(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_input_pad(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_input_air(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_input_phantom(struct usb_mixer_interface *mixer);
 static void scarlett2_notify_input_other(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_input_select(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_input_gain(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_input_autogain(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_input_safe(struct usb_mixer_interface *mixer);
 static void scarlett2_notify_monitor_other(struct usb_mixer_interface *mixer);
 static void scarlett2_notify_direct_monitor(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_power_status(struct usb_mixer_interface *mixer);
 
 /* Arrays of notification callback functions */
 
@@ -322,6 +333,46 @@ static const struct scarlett2_notification scarlett3a_notifications[] = {
 	{ 0x00000001, NULL }, /* ack, gets ignored */
 	{ 0x00800000, scarlett2_notify_input_other },
 	{ 0x01000000, scarlett2_notify_direct_monitor },
+	{ 0, NULL }
+};
+
+static const struct scarlett2_notification scarlett4_solo_notifications[] = {
+	{ 0x00000001, NULL }, /* ack, gets ignored */
+	{ 0x00000008, scarlett2_notify_sync },
+	{ 0x00400000, scarlett2_notify_input_air },
+	{ 0x00800000, scarlett2_notify_direct_monitor },
+	{ 0x01000000, scarlett2_notify_input_level },
+	{ 0x02000000, scarlett2_notify_input_phantom },
+	{ 0, NULL }
+};
+
+static const struct scarlett2_notification scarlett4_2i2_notifications[] = {
+	{ 0x00000001, NULL }, /* ack, gets ignored */
+	{ 0x00000008, scarlett2_notify_sync },
+	{ 0x00200000, scarlett2_notify_input_safe },
+	{ 0x00400000, scarlett2_notify_input_autogain },
+	{ 0x00800000, scarlett2_notify_input_air },
+	{ 0x01000000, scarlett2_notify_direct_monitor },
+	{ 0x02000000, scarlett2_notify_input_select },
+	{ 0x04000000, scarlett2_notify_input_level },
+	{ 0x08000000, scarlett2_notify_input_phantom },
+	{ 0x40000000, scarlett2_notify_input_gain },
+	{ 0, NULL }
+};
+
+static const struct scarlett2_notification scarlett4_4i4_notifications[] = {
+	{ 0x00000001, NULL }, /* ack, gets ignored */
+	{ 0x00000008, scarlett2_notify_sync },
+	{ 0x00200000, scarlett2_notify_input_safe },
+	{ 0x00400000, scarlett2_notify_input_autogain },
+	{ 0x00800000, scarlett2_notify_input_air },
+	{ 0x01000000, scarlett2_notify_input_select },
+	{ 0x02000000, scarlett2_notify_input_level },
+	{ 0x04000000, scarlett2_notify_input_phantom },
+	{ 0x08000000, scarlett2_notify_power_status }, /* power external */
+	{ 0x20000000, scarlett2_notify_input_gain },
+	{ 0x40000000, scarlett2_notify_power_status }, /* power fail */
+	{ 0x80000000, scarlett2_notify_volume },
 	{ 0, NULL }
 };
 
@@ -540,6 +591,123 @@ static const struct scarlett2_config_set scarlett2_config_set_gen3c = {
 
 		[SCARLETT2_CONFIG_TALKBACK_MAP] = {
 			.offset = 0xb0, .size = 16, .activate = 10 },
+	}
+};
+
+/* Solo Gen 4 */
+static const struct scarlett2_config_set scarlett2_config_set_gen4_solo = {
+	.notifications = scarlett4_solo_notifications,
+	.gen4_write_addr = 0xd8,
+	.items = {
+		[SCARLETT2_CONFIG_MSD_SWITCH] = {
+			.offset = 0x47, .size = 8, .activate = 4 },
+
+		[SCARLETT2_CONFIG_DIRECT_MONITOR] = {
+			.offset = 0x108, .activate = 12 },
+
+		[SCARLETT2_CONFIG_PHANTOM_SWITCH] = {
+			.offset = 0x46, .activate = 9, .mute = 1 },
+
+		[SCARLETT2_CONFIG_LEVEL_SWITCH] = {
+			.offset = 0x3d, .activate = 10, .mute = 1 },
+
+		[SCARLETT2_CONFIG_AIR_SWITCH] = {
+			.offset = 0x3e, .activate = 11 },
+
+		[SCARLETT2_CONFIG_DIRECT_MONITOR_GAIN] = {
+			.offset = 0x232, .size = 16, .activate = 26 }
+	}
+};
+
+/* 2i2 Gen 4 */
+static const struct scarlett2_config_set scarlett2_config_set_gen4_2i2 = {
+	.notifications = scarlett4_2i2_notifications,
+	.gen4_write_addr = 0xfc,
+	.items = {
+		[SCARLETT2_CONFIG_MSD_SWITCH] = {
+			.offset = 0x49, .size = 8, .activate = 4 }, // 0x41 ??
+
+		[SCARLETT2_CONFIG_DIRECT_MONITOR] = {
+			.offset = 0x14a, .activate = 16 },
+
+		[SCARLETT2_CONFIG_AUTOGAIN_SWITCH] = {
+			.offset = 0x135, .activate = 10 },
+
+		[SCARLETT2_CONFIG_AUTOGAIN_STATUS] = {
+			.offset = 0x137 },
+
+		[SCARLETT2_CONFIG_PHANTOM_SWITCH] = {
+			.offset = 0x48, .activate = 11, .mute = 1 },
+
+		[SCARLETT2_CONFIG_INPUT_GAIN] = {
+			.offset = 0x4b, .activate = 12 },
+
+		[SCARLETT2_CONFIG_LEVEL_SWITCH] = {
+			.offset = 0x3c, .activate = 13, .mute = 1 },
+
+		[SCARLETT2_CONFIG_SAFE_SWITCH] = {
+			.offset = 0x147, .activate = 14 },
+
+		[SCARLETT2_CONFIG_AIR_SWITCH] = {
+			.offset = 0x3e, .activate = 15 },
+
+		[SCARLETT2_CONFIG_INPUT_SELECT_SWITCH] = {
+			.offset = 0x14b, .activate = 17 },
+
+		[SCARLETT2_CONFIG_INPUT_LINK_SWITCH] = {
+			.offset = 0x14e, .activate = 18 },
+
+		[SCARLETT2_CONFIG_DIRECT_MONITOR_GAIN] = {
+			.offset = 0x2a0, .size = 16, .activate = 36 }
+	}
+};
+
+/* 4i4 Gen 4 */
+static const struct scarlett2_config_set scarlett2_config_set_gen4_4i4 = {
+	.notifications = scarlett4_4i4_notifications,
+	.gen4_write_addr = 0x130,
+	.items = {
+		[SCARLETT2_CONFIG_MSD_SWITCH] = {
+			.offset = 0x5c, .size = 8, .activate = 4 },
+
+		[SCARLETT2_CONFIG_AUTOGAIN_SWITCH] = {
+			.offset = 0x13e, .activate = 10 },
+
+		[SCARLETT2_CONFIG_AUTOGAIN_STATUS] = {
+			.offset = 0x140 },
+
+		[SCARLETT2_CONFIG_PHANTOM_SWITCH] = {
+			.offset = 0x5a, .activate = 11, .mute = 1 },
+
+		[SCARLETT2_CONFIG_INPUT_GAIN] = {
+			.offset = 0x5e, .activate = 12 },
+
+		[SCARLETT2_CONFIG_LEVEL_SWITCH] = {
+			.offset = 0x4e, .activate = 13, .mute = 1 },
+
+		[SCARLETT2_CONFIG_SAFE_SWITCH] = {
+			.offset = 0x150, .activate = 14 },
+
+		[SCARLETT2_CONFIG_AIR_SWITCH] = {
+			.offset = 0x50, .activate = 15 },
+
+		[SCARLETT2_CONFIG_INPUT_SELECT_SWITCH] = {
+			.offset = 0x153, .activate = 16 },
+
+		[SCARLETT2_CONFIG_INPUT_LINK_SWITCH] = {
+			.offset = 0x156, .activate = 17 },
+
+		[SCARLETT2_CONFIG_MASTER_VOLUME] = {
+			.offset = 0x32, .size = 16 },
+
+		[SCARLETT2_CONFIG_HEADPHONE_VOLUME] = {
+			.offset = 0x3a, .size = 16 },
+
+		[SCARLETT2_CONFIG_POWER_EXT] = {
+			.offset = 0x168 },
+
+		[SCARLETT2_CONFIG_POWER_FAIL] = {
+			.offset = 0x66 }
 	}
 };
 
@@ -1274,6 +1442,160 @@ static const struct scarlett2_device_info s18i20_gen3_info = {
 	}
 };
 
+static const struct scarlett2_device_info solo_gen4_info = {
+	.config_set = &scarlett2_config_set_gen4_solo,
+	.min_firmware_version = 2096,
+
+	.level_input_count = 1,
+	.air_input_count = 1,
+	.air_input_first = 1,
+	.air_option = 1,
+	.phantom_count = 1,
+	.phantom_first = 1,
+	.inputs_per_phantom = 1,
+	.direct_monitor = 1,
+	.dsp_count = 2,
+
+	.port_count = {
+		[SCARLETT2_PORT_TYPE_NONE]     = { 1,  0 },
+		[SCARLETT2_PORT_TYPE_ANALOGUE] = { 2,  2 },
+		[SCARLETT2_PORT_TYPE_MIX]      = { 8,  6 },
+		[SCARLETT2_PORT_TYPE_PCM]      = { 2,  4 },
+	},
+
+	.mux_assignment = { {
+		{ SCARLETT2_PORT_TYPE_MIX,       4,  2 },
+		{ SCARLETT2_PORT_TYPE_MIX,       2,  2 },
+		{ SCARLETT2_PORT_TYPE_PCM,       0,  4 },
+		{ SCARLETT2_PORT_TYPE_MIX,       0,  2 },
+		{ SCARLETT2_PORT_TYPE_ANALOGUE,  0,  2 },
+		{ 0,                             0,  0 },
+	}, {
+		{ SCARLETT2_PORT_TYPE_MIX,       4,  2 },
+		{ SCARLETT2_PORT_TYPE_MIX,       2,  2 },
+		{ SCARLETT2_PORT_TYPE_PCM,       0,  4 },
+		{ SCARLETT2_PORT_TYPE_MIX,       0,  2 },
+		{ SCARLETT2_PORT_TYPE_ANALOGUE,  0,  2 },
+		{ 0,                             0,  0 },
+	}, {
+		{ SCARLETT2_PORT_TYPE_MIX,       4,  2 },
+		{ SCARLETT2_PORT_TYPE_MIX,       2,  2 },
+		{ SCARLETT2_PORT_TYPE_PCM,       0,  4 },
+		{ SCARLETT2_PORT_TYPE_MIX,       0,  2 },
+		{ SCARLETT2_PORT_TYPE_ANALOGUE,  0,  2 },
+		{ 0,                             0,  0 },
+	} },
+
+	.meter_map = {
+		{  6,  2 },
+		{  4,  2 },
+		{  8,  4 },
+		{  2,  2 },
+		{  0,  2 },
+		{  0,  0 }
+	}
+};
+
+static const struct scarlett2_device_info s2i2_gen4_info = {
+	.config_set = &scarlett2_config_set_gen4_2i2,
+	.min_firmware_version = 2100,
+
+	.level_input_count = 2,
+	.air_input_count = 2,
+	.air_option = 1,
+	.phantom_count = 1,
+	.inputs_per_phantom = 2,
+	.gain_input_count = 2,
+	.direct_monitor = 2,
+	.dsp_count = 2,
+
+	.port_count = {
+		[SCARLETT2_PORT_TYPE_NONE]     = { 1,  0 },
+		[SCARLETT2_PORT_TYPE_ANALOGUE] = { 2,  2 },
+		[SCARLETT2_PORT_TYPE_MIX]      = { 6,  6 },
+		[SCARLETT2_PORT_TYPE_PCM]      = { 2,  4 },
+	},
+
+	.mux_assignment = { {
+		{ SCARLETT2_PORT_TYPE_MIX,       4,  2 },
+		{ SCARLETT2_PORT_TYPE_MIX,       2,  2 },
+		{ SCARLETT2_PORT_TYPE_PCM,       0,  4 },
+		{ SCARLETT2_PORT_TYPE_MIX,       0,  2 },
+		{ SCARLETT2_PORT_TYPE_ANALOGUE,  0,  2 },
+		{ 0,                             0,  0 },
+	}, {
+		{ SCARLETT2_PORT_TYPE_MIX,       4,  2 },
+		{ SCARLETT2_PORT_TYPE_MIX,       2,  2 },
+		{ SCARLETT2_PORT_TYPE_PCM,       0,  4 },
+		{ SCARLETT2_PORT_TYPE_MIX,       0,  2 },
+		{ SCARLETT2_PORT_TYPE_ANALOGUE,  0,  2 },
+		{ 0,                             0,  0 },
+	}, {
+		{ SCARLETT2_PORT_TYPE_MIX,       4,  2 },
+		{ SCARLETT2_PORT_TYPE_MIX,       2,  2 },
+		{ SCARLETT2_PORT_TYPE_PCM,       0,  4 },
+		{ SCARLETT2_PORT_TYPE_MIX,       0,  2 },
+		{ SCARLETT2_PORT_TYPE_ANALOGUE,  0,  2 },
+		{ 0,                             0,  0 },
+	} },
+
+	.meter_map = {
+		{  6,  2 },
+		{  4,  2 },
+		{  8,  4 },
+		{  2,  2 },
+		{  0,  2 },
+		{  0,  0 }
+	}
+};
+
+static const struct scarlett2_device_info s4i4_gen4_info = {
+	.config_set = &scarlett2_config_set_gen4_4i4,
+	.min_firmware_version = 2089,
+
+	.level_input_count = 2,
+	.air_input_count = 2,
+	.air_option = 1,
+	.phantom_count = 2,
+	.inputs_per_phantom = 1,
+	.gain_input_count = 2,
+	.dsp_count = 2,
+
+	.port_count = {
+		[SCARLETT2_PORT_TYPE_NONE]     = { 1,  0 },
+		[SCARLETT2_PORT_TYPE_ANALOGUE] = { 4,  6 },
+		[SCARLETT2_PORT_TYPE_MIX]      = { 8, 12 },
+		[SCARLETT2_PORT_TYPE_PCM]      = { 6,  6 },
+	},
+
+	.mux_assignment = { {
+		{ SCARLETT2_PORT_TYPE_MIX,      10,  2 },
+		{ SCARLETT2_PORT_TYPE_PCM,       0,  6 },
+		{ SCARLETT2_PORT_TYPE_MIX,       0, 10 },
+		{ SCARLETT2_PORT_TYPE_ANALOGUE,  0,  6 },
+		{ 0,                             0,  0 },
+	}, {
+		{ SCARLETT2_PORT_TYPE_MIX,      10,  2 },
+		{ SCARLETT2_PORT_TYPE_PCM,       0,  6 },
+		{ SCARLETT2_PORT_TYPE_MIX,       0, 10 },
+		{ SCARLETT2_PORT_TYPE_ANALOGUE,  0,  6 },
+		{ 0,                             0,  0 },
+	}, {
+		{ SCARLETT2_PORT_TYPE_MIX,      10,  2 },
+		{ SCARLETT2_PORT_TYPE_PCM,       0,  6 },
+		{ SCARLETT2_PORT_TYPE_MIX,       0, 10 },
+		{ SCARLETT2_PORT_TYPE_ANALOGUE,  0,  6 },
+		{ 0,                             0,  0 },
+	} },
+
+	.meter_map = {
+		{ 16,  8 },
+		{  6, 10 },
+		{  0,  6 },
+		{  0,  0 }
+	}
+};
+
 static const struct scarlett2_device_info clarett_2pre_info = {
 	.config_set = &scarlett2_config_set_clarett,
 	.level_input_count = 2,
@@ -1450,6 +1772,11 @@ static const struct scarlett2_device_entry scarlett2_devices[] = {
 	{ USB_ID(0x1235, 0x8213), &s8i6_gen3_info, "Scarlett Gen 3" },
 	{ USB_ID(0x1235, 0x8214), &s18i8_gen3_info, "Scarlett Gen 3" },
 	{ USB_ID(0x1235, 0x8215), &s18i20_gen3_info, "Scarlett Gen 3" },
+
+	/* Supported Gen 4 devices */
+	{ USB_ID(0x1235, 0x8218), &solo_gen4_info, "Scarlett Gen 4" },
+	{ USB_ID(0x1235, 0x8219), &s2i2_gen4_info, "Scarlett Gen 4" },
+	{ USB_ID(0x1235, 0x821a), &s4i4_gen4_info, "Scarlett Gen 4" },
 
 	/* Supported Clarett USB/Clarett+ devices */
 	{ USB_ID(0x1235, 0x8206), &clarett_2pre_info, "Clarett USB" },
@@ -5901,8 +6228,7 @@ static void scarlett2_notify_monitor(struct usb_mixer_interface *mixer)
 }
 
 /* Notify on volume change (Gen 4) */
-static __always_unused void scarlett2_notify_volume(
-	struct usb_mixer_interface *mixer)
+static void scarlett2_notify_volume(struct usb_mixer_interface *mixer)
 {
 	struct scarlett2_data *private = mixer->private_data;
 
@@ -6006,8 +6332,7 @@ static void scarlett2_notify_input_other(struct usb_mixer_interface *mixer)
 }
 
 /* Notify on input select change */
-static __always_unused void scarlett2_notify_input_select(
-	struct usb_mixer_interface *mixer)
+static void scarlett2_notify_input_select(struct usb_mixer_interface *mixer)
 {
 	struct snd_card *card = mixer->chip->card;
 	struct scarlett2_data *private = mixer->private_data;
@@ -6029,8 +6354,7 @@ static __always_unused void scarlett2_notify_input_select(
 }
 
 /* Notify on input gain change */
-static __always_unused void scarlett2_notify_input_gain(
-	struct usb_mixer_interface *mixer)
+static void scarlett2_notify_input_gain(struct usb_mixer_interface *mixer)
 {
 	struct snd_card *card = mixer->chip->card;
 	struct scarlett2_data *private = mixer->private_data;
@@ -6048,8 +6372,7 @@ static __always_unused void scarlett2_notify_input_gain(
 }
 
 /* Notify on autogain change */
-static __always_unused void scarlett2_notify_input_autogain(
-	struct usb_mixer_interface *mixer)
+static void scarlett2_notify_input_autogain(struct usb_mixer_interface *mixer)
 {
 	struct snd_card *card = mixer->chip->card;
 	struct scarlett2_data *private = mixer->private_data;
@@ -6070,8 +6393,7 @@ static __always_unused void scarlett2_notify_input_autogain(
 }
 
 /* Notify on input safe switch change */
-static __always_unused void scarlett2_notify_input_safe(
-	struct usb_mixer_interface *mixer)
+static void scarlett2_notify_input_safe(struct usb_mixer_interface *mixer)
 {
 	struct snd_card *card = mixer->chip->card;
 	struct scarlett2_data *private = mixer->private_data;
@@ -6146,8 +6468,7 @@ static void scarlett2_notify_direct_monitor(struct usb_mixer_interface *mixer)
 }
 
 /* Notify on power change */
-static __always_unused void scarlett2_notify_power_status(
-	struct usb_mixer_interface *mixer)
+static void scarlett2_notify_power_status(struct usb_mixer_interface *mixer)
 {
 	struct snd_card *card = mixer->chip->card;
 	struct scarlett2_data *private = mixer->private_data;
