@@ -632,8 +632,14 @@ struct scarlett2_device_info {
 	 */
 	u8 air_input_count;
 
+	/* the first input with an air control (0-based) */
+	u8 air_input_first;
+
 	/* the number of phantom (48V) software switchable controls */
 	u8 phantom_count;
+
+	/* the first input with phantom power control (0-based) */
+	u8 phantom_first;
 
 	/* the number of inputs each phantom switch controls */
 	u8 inputs_per_phantom;
@@ -2703,6 +2709,7 @@ static int scarlett2_update_input_level(struct usb_mixer_interface *mixer)
 {
 	struct scarlett2_data *private = mixer->private_data;
 	const struct scarlett2_device_info *info = private->info;
+	int count = info->level_input_count + info->level_input_first;
 	int err;
 
 	private->input_level_updated = 0;
@@ -2712,8 +2719,7 @@ static int scarlett2_update_input_level(struct usb_mixer_interface *mixer)
 
 	err = scarlett2_usb_get_config(
 		mixer, SCARLETT2_CONFIG_LEVEL_SWITCH,
-		info->level_input_count + info->level_input_first,
-		private->level_switch);
+		count, private->level_switch);
 	if (err < 0)
 		return err;
 
@@ -3047,6 +3053,7 @@ static int scarlett2_phantom_ctl_put(struct snd_kcontrol *kctl,
 	struct usb_mixer_elem_info *elem = kctl->private_data;
 	struct usb_mixer_interface *mixer = elem->head.mixer;
 	struct scarlett2_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
 
 	int index = elem->control;
 	int oval, val, err = 0;
@@ -3068,7 +3075,7 @@ static int scarlett2_phantom_ctl_put(struct snd_kcontrol *kctl,
 
 	/* Send switch change to the device */
 	err = scarlett2_usb_set_config(mixer, SCARLETT2_CONFIG_PHANTOM_SWITCH,
-				       index, val);
+				       index + info->phantom_first, val);
 	if (err == 0)
 		err = 1;
 
@@ -3767,7 +3774,8 @@ static int scarlett2_add_line_in_ctls(struct usb_mixer_interface *mixer)
 
 	/* Add input air controls */
 	for (i = 0; i < info->air_input_count; i++) {
-		snprintf(s, sizeof(s), fmt, i + 1, "Air", "Switch");
+		snprintf(s, sizeof(s), fmt, i + 1 + info->air_input_first,
+			 "Air", "Switch");
 		err = scarlett2_add_new_ctl(mixer, &scarlett2_air_ctl,
 					    i, 1, s, &private->air_ctls[i]);
 		if (err < 0)
@@ -3777,7 +3785,7 @@ static int scarlett2_add_line_in_ctls(struct usb_mixer_interface *mixer)
 	/* Add input phantom controls */
 	if (info->inputs_per_phantom == 1) {
 		for (i = 0; i < info->phantom_count; i++) {
-			snprintf(s, sizeof(s), fmt, i + 1,
+			snprintf(s, sizeof(s), fmt, i + 1 + info->phantom_first,
 				 "Phantom Power", "Switch");
 			err = scarlett2_add_new_ctl(
 				mixer, &scarlett2_phantom_ctl,
