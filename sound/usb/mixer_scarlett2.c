@@ -760,6 +760,7 @@ struct scarlett2_data {
 	u8 monitor_other_updated;
 	u8 direct_monitor_updated;
 	u8 mux_updated;
+	u8 mix_updated;
 	u8 speaker_switching_switched;
 	u8 power_status_updated;
 	u8 sync;
@@ -804,6 +805,7 @@ struct scarlett2_data {
 	struct snd_kcontrol *autogain_status_ctls[SCARLETT2_INPUT_GAIN_MAX];
 	struct snd_kcontrol *safe_ctls[SCARLETT2_INPUT_GAIN_MAX];
 	struct snd_kcontrol *mux_ctls[SCARLETT2_MUX_MAX];
+	struct snd_kcontrol *mix_ctls[SCARLETT2_MIX_MAX];
 	struct snd_kcontrol *direct_monitor_ctl;
 	struct snd_kcontrol *speaker_switching_ctl;
 	struct snd_kcontrol *talkback_ctl;
@@ -4582,10 +4584,33 @@ static int scarlett2_mixer_ctl_get(struct snd_kcontrol *kctl,
 				   struct snd_ctl_elem_value *ucontrol)
 {
 	struct usb_mixer_elem_info *elem = kctl->private_data;
-	struct scarlett2_data *private = elem->head.mixer->private_data;
+	struct usb_mixer_interface *mixer = elem->head.mixer;
+	struct scarlett2_data *private = mixer->private_data;
+	int err = 0;
 
+	mutex_lock(&private->data_mutex);
+
+	if (private->hwdep_in_use) {
+		err = -EBUSY;
+		goto unlock;
+	}
+
+	if (private->mix_updated) {
+		int i;
+
+		private->mix_updated = 0;
+
+		for (i = 0; i < private->num_mix_out; i++) {
+			err = scarlett2_usb_get_mix(mixer, i);
+			if (err < 0)
+				goto unlock;
+		}
+	}
 	ucontrol->value.integer.value[0] = private->mix[elem->control];
-	return 0;
+
+unlock:
+	mutex_unlock(&private->data_mutex);
+	return err;
 }
 
 static int scarlett2_mixer_ctl_put(struct snd_kcontrol *kctl,
@@ -4653,7 +4678,8 @@ static int scarlett2_add_mixer_ctls(struct usb_mixer_interface *mixer)
 				 "Mix %c Input %02d Playback Volume",
 				 'A' + i, j + 1);
 			err = scarlett2_add_new_ctl(mixer, &scarlett2_mixer_ctl,
-						    index, 1, s, NULL);
+						    index, 1, s,
+						    &private->mix_ctls[index]);
 			if (err < 0)
 				return err;
 		}
