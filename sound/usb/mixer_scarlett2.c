@@ -660,6 +660,9 @@ struct scarlett2_device_info {
 	/* which set of configuration parameters the device uses */
 	const struct scarlett2_config_set *config_set;
 
+	/* minimum firmware version required */
+	u16 min_firmware_version;
+
 	/* support for main/alt speaker switching */
 	u8 has_speaker_switching;
 
@@ -5649,6 +5652,7 @@ static int scarlett2_get_flash_segment_nums(struct usb_mixer_interface *mixer)
 static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 {
 	struct scarlett2_data *private = mixer->private_data;
+	const struct scarlett2_device_info *info = private->info;
 	int err, i;
 
 	if (scarlett2_has_config_item(private, SCARLETT2_CONFIG_MSD_SWITCH)) {
@@ -5657,11 +5661,22 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 			1, &private->msd_switch);
 		if (err < 0)
 			return err;
-
-		/* no other controls are created if MSD mode is on */
-		if (private->msd_switch)
-			return 0;
 	}
+
+	if (private->firmware_version < info->min_firmware_version) {
+		usb_audio_err(mixer->chip,
+			      "Focusrite %s firmware version %d is too old\n",
+			      private->series_name,
+			      private->firmware_version);
+		usb_audio_info(mixer->chip,
+			       "Get the scarlett2 firmware update utility from "
+			       "https://github.com/geoffreybennett/scarlett2/");
+		return 0;
+	}
+
+	/* no other controls are created if MSD mode is on */
+	if (private->msd_switch)
+		return 0;
 
 	err = scarlett2_update_input_level(mixer);
 	if (err < 0)
@@ -6186,8 +6201,11 @@ static int snd_scarlett2_controls_create(
 	if (err < 0)
 		return err;
 
-	/* If MSD mode is enabled, don't create any other controls */
-	if (private->msd_switch)
+	/* If MSD mode is enabled, or if the firmware version is too
+	 * old, don't create any other controls
+	 */
+	if (private->msd_switch ||
+	    private->firmware_version < private->info->min_firmware_version)
 		return 0;
 
 	/* Create the analogue output controls */
