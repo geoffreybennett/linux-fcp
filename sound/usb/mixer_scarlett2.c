@@ -266,7 +266,8 @@ enum {
 enum {
 	SCARLETT2_FLASH_WRITE_STATE_IDLE = 0,
 	SCARLETT2_FLASH_WRITE_STATE_SELECTED = 1,
-	SCARLETT2_FLASH_WRITE_STATE_ERASING = 2
+	SCARLETT2_FLASH_WRITE_STATE_ERASING = 2,
+	SCARLETT2_FLASH_WRITE_STATE_WRITE = 3
 };
 
 static const char *const scarlett2_dim_mute_names[SCARLETT2_DIM_MUTE_COUNT] = {
@@ -4978,7 +4979,7 @@ static int scarlett2_ioctl_select_flash_segment(
 		return -EFAULT;
 	}
 
-	/* Currently erasing; wait for it to complete */
+	/* If erasing, wait for it to complete */
 	if (private->flash_write_state == SCARLETT2_FLASH_WRITE_STATE_ERASING) {
 		int err = scarlett2_wait_for_erase(mixer);
 
@@ -5079,23 +5080,20 @@ static int scarlett2_ioctl_get_erase_progress(
 		return -EFAULT;
 
 	/* If the erase is complete, change the state from ERASING to
-	 * IDLE.
+	 * WRITE.
 	 */
 	if (progress.progress == 0xff)
-		private->flash_write_state = SCARLETT2_FLASH_WRITE_STATE_IDLE;
+		private->flash_write_state = SCARLETT2_FLASH_WRITE_STATE_WRITE;
 
 	return 0;
 }
 
-/* When the hwdep device is opened, wait for any running erasing to
- * complete, then set the state to IDLE.
- */
 static int scarlett2_hwdep_open(struct snd_hwdep *hw, struct file *file)
 {
 	struct usb_mixer_interface *mixer = hw->private_data;
 	struct scarlett2_data *private = mixer->private_data;
 
-	/* Wait for erase to complete if one had previously been started */
+	/* If erasing, wait for it to complete */
 	if (private->flash_write_state ==
 	      SCARLETT2_FLASH_WRITE_STATE_ERASING) {
 		int err = scarlett2_wait_for_erase(mixer);
@@ -5138,6 +5136,90 @@ static int scarlett2_hwdep_ioctl(struct snd_hwdep *hw, struct file *file,
 	}
 }
 
+static long scarlett2_hwdep_write(struct snd_hwdep *hw,
+				  const char __user *buf,
+				  long count, loff_t *offset)
+{
+	struct usb_mixer_interface *mixer = hw->private_data;
+	struct scarlett2_data *private = mixer->private_data;
+	int segment_id, segment_num, err, len;
+	int flash_size;
+
+	/* Maximum 1KB write request */
+	struct {
+		__le32 segment_num;
+		__le32 offset;
+		__le32 pad;
+		u8 data[1012];
+	} __packed *upload_req;
+
+	/* If erasing, wait for it to complete */
+	if (private->flash_write_state ==
+	      SCARLETT2_FLASH_WRITE_STATE_ERASING) {
+		err = scarlett2_wait_for_erase(mixer);
+		if (err < 0)
+			return err;
+		private->flash_write_state = SCARLETT2_FLASH_WRITE_STATE_WRITE;
+
+	/* Check that an erase has been done & completed */
+	} else if (private->flash_write_state !=
+		     SCARLETT2_FLASH_WRITE_STATE_WRITE) {
+		return -EINVAL;
+	}
+
+	/* Check that we're writing to the upgrade firmware */
+	segment_id = private->selected_flash_segment_id;
+	if (segment_id != SCARLETT2_SEGMENT_ID_FIRMWARE)
+		return -EINVAL;
+
+	segment_num = private->flash_segment_nums[segment_id];
+	if (segment_num < SCARLETT2_SEGMENT_NUM_MIN ||
+	    segment_num > SCARLETT2_SEGMENT_NUM_MAX)
+		return -EFAULT;
+
+	/* Validate the offset and count */
+	flash_size = private->flash_segment_blocks[segment_id] *
+		     SCARLETT2_FLASH_BLOCK_SIZE;
+
+	if (count < 0 || *offset < 0 || *offset + count >= flash_size)
+		return -EINVAL;
+
+	if (!count)
+		return 0;
+
+	/* Write at most 1012 bytes at a time */
+	if (count > sizeof(upload_req->data))
+		count = sizeof(upload_req->data);
+
+	/* Create and send the request */
+	upload_req = kzalloc(sizeof(*upload_req), GFP_KERNEL);
+	if (!upload_req)
+		return -ENOMEM;
+
+	upload_req->segment_num = cpu_to_le32(segment_num);
+	upload_req->offset = cpu_to_le32(*offset);
+	upload_req->pad = 0;
+
+	if (copy_from_user(upload_req->data, buf, count)) {
+		err = -EFAULT;
+		goto error;
+	}
+
+	len = sizeof(*upload_req) - sizeof(upload_req->data) + count;
+
+	err = scarlett2_usb(mixer, SCARLETT2_USB_WRITE_SEGMENT,
+			    upload_req, len, NULL, 0);
+	if (err < 0)
+		goto error;
+
+	*offset += count;
+
+error:
+	kfree(upload_req);
+
+	return count;
+}
+
 static int scarlett2_hwdep_release(struct snd_hwdep *hw, struct file *file)
 {
 	struct usb_mixer_interface *mixer = hw->private_data;
@@ -5167,6 +5249,7 @@ static int scarlett2_hwdep_init(struct usb_mixer_interface *mixer)
 	hw->exclusive = 1;
 	hw->ops.open = scarlett2_hwdep_open;
 	hw->ops.ioctl = scarlett2_hwdep_ioctl;
+	hw->ops.write = scarlett2_hwdep_write;
 	hw->ops.release = scarlett2_hwdep_release;
 
 	return 0;
