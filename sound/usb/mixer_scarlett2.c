@@ -3725,6 +3725,13 @@ static int scarlett2_add_line_out_ctls(struct usb_mixer_interface *mixer)
 			return err;
 	}
 
+	/* Remaining controls are only applicable if the device
+	 * has per-channel line-out volume controls.
+	 */
+	if (!scarlett2_has_config_item(private,
+				       SCARLETT2_CONFIG_LINE_OUT_VOLUME))
+		return 0;
+
 	/* Add volume controls */
 	for (i = 0; i < private->num_line_out; i++) {
 		int index = line_out_remap(private, i);
@@ -4568,7 +4575,6 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 {
 	struct scarlett2_data *private = mixer->private_data;
 	int err, i;
-	s16 sw_vol[SCARLETT2_ANALOGUE_MAX];
 
 	if (scarlett2_has_config_item(private, SCARLETT2_CONFIG_MSD_SWITCH)) {
 		err = scarlett2_usb_get_config(
@@ -4607,41 +4613,47 @@ static int scarlett2_read_configs(struct usb_mixer_interface *mixer)
 	if (err < 0)
 		return err;
 
-	/* read SW line out volume */
-	err = scarlett2_usb_get_config(
-		mixer, SCARLETT2_CONFIG_LINE_OUT_VOLUME,
-		private->num_line_out, &sw_vol);
-	if (err < 0)
-		return err;
-
-	for (i = 0; i < private->num_line_out; i++)
-		private->vol[i] = clamp(
-			sw_vol[i] + SCARLETT2_VOLUME_BIAS,
-			0, SCARLETT2_VOLUME_BIAS);
-
-	/* read SW mute */
-	err = scarlett2_usb_get_config(
-		mixer, SCARLETT2_CONFIG_MUTE_SWITCH,
-		private->num_line_out, &private->mute_switch);
-	if (err < 0)
-		return err;
-
-	for (i = 0; i < private->num_line_out; i++)
-		private->mute_switch[i] =
-			!!private->mute_switch[i];
-
-	/* read SW/HW switches */
 	if (scarlett2_has_config_item(private,
-				      SCARLETT2_CONFIG_SW_HW_SWITCH)) {
+				      SCARLETT2_CONFIG_LINE_OUT_VOLUME)) {
+		s16 sw_vol[SCARLETT2_ANALOGUE_MAX];
+
+		/* read SW line out volume */
 		err = scarlett2_usb_get_config(
-			mixer, SCARLETT2_CONFIG_SW_HW_SWITCH,
-			private->num_line_out, &private->vol_sw_hw_switch);
+			mixer, SCARLETT2_CONFIG_LINE_OUT_VOLUME,
+			private->num_line_out, &sw_vol);
 		if (err < 0)
 			return err;
 
 		for (i = 0; i < private->num_line_out; i++)
-			private->vol_sw_hw_switch[i] =
-				!!private->vol_sw_hw_switch[i];
+			private->vol[i] = clamp(
+				sw_vol[i] + SCARLETT2_VOLUME_BIAS,
+				0, SCARLETT2_VOLUME_BIAS);
+
+		/* read SW mute */
+		err = scarlett2_usb_get_config(
+			mixer, SCARLETT2_CONFIG_MUTE_SWITCH,
+			private->num_line_out, &private->mute_switch);
+		if (err < 0)
+			return err;
+
+		for (i = 0; i < private->num_line_out; i++)
+			private->mute_switch[i] =
+				!!private->mute_switch[i];
+
+		/* read SW/HW switches */
+		if (scarlett2_has_config_item(private,
+					      SCARLETT2_CONFIG_SW_HW_SWITCH)) {
+			err = scarlett2_usb_get_config(
+				mixer, SCARLETT2_CONFIG_SW_HW_SWITCH,
+				private->num_line_out,
+				&private->vol_sw_hw_switch);
+			if (err < 0)
+				return err;
+
+			for (i = 0; i < private->num_line_out; i++)
+				private->vol_sw_hw_switch[i] =
+					!!private->vol_sw_hw_switch[i];
+		}
 	}
 
 	err = scarlett2_update_volumes(mixer);
