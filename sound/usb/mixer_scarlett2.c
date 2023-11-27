@@ -316,6 +316,7 @@ static void scarlett2_notify_input_safe(struct usb_mixer_interface *mixer);
 static void scarlett2_notify_monitor_other(struct usb_mixer_interface *mixer);
 static void scarlett2_notify_direct_monitor(struct usb_mixer_interface *mixer);
 static void scarlett2_notify_power_status(struct usb_mixer_interface *mixer);
+static void scarlett2_notify_mux(struct usb_mixer_interface *mixer);
 
 /* Arrays of notification callback functions */
 
@@ -343,6 +344,7 @@ static const struct scarlett2_notification scarlett4_solo_notifications[] = {
 	{ 0x00800000, scarlett2_notify_direct_monitor },
 	{ 0x01000000, scarlett2_notify_input_level },
 	{ 0x02000000, scarlett2_notify_input_phantom },
+	{ 0x04000000, scarlett2_notify_mux },
 	{ 0, NULL }
 };
 
@@ -6477,6 +6479,20 @@ static void scarlett2_notify_power_status(struct usb_mixer_interface *mixer)
 
 	snd_ctl_notify(card, SNDRV_CTL_EVENT_MASK_VALUE,
 		       &private->power_status_ctl->id);
+}
+
+/* Notify on mux change */
+static void scarlett2_notify_mux(struct usb_mixer_interface *mixer)
+{
+	struct snd_card *card = mixer->chip->card;
+	struct scarlett2_data *private = mixer->private_data;
+	int i;
+
+	private->mux_updated = 1;
+
+	for (i = 0; i < private->num_mux_dsts; i++)
+		snd_ctl_notify(card, SNDRV_CTL_EVENT_MASK_VALUE,
+			       &private->mux_ctls[i]->id);
 }
 
 /* Interrupt callback */
