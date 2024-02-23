@@ -16,21 +16,23 @@ This driver is an extension to ALSA, specifically to the
 
 - Scarlett Gen 2: Supported since Linux 5.4 (bug fixes in Linux 5.14)
 - Scarlett Gen 3: Supported since Linux 5.14
-- Clarett+ 8Pre: SUpported since Linux 6.1
+- Clarett+ 8Pre: Supported since Linux 6.1
 - Clarett 2Pre/4Pre/8Pre USB, Clarett+ 2Pre/4Pre: Supported since
   Linux 6.7
-- Scarlett Gen 4: Supported in this repository (`scarlett-gen4`
-  branch)
+- Scarlett Gen 4: Supported since Linux 6.8
 
 Note: From Linux 6.7 onwards, the driver is enabled by default and
 this is the first version where the level meters work.
 
 ## Repository Purpose
 
-This repository is a fork of the Linux kernel, used for sharing the
-development code before it arrives in the mainstream kernel. It also
-provides backports for the `snd_usb_audio` module so that you don't
-have to wait for Linux 6.7 to use it.
+This repository is a fork of the Linux kernel, used for:
+
+1) Sharing the development code before it arrives in the mainstream
+kernel.
+
+2) Sharing backports for the `snd_usb_audio` module so that you don't
+have to wait for Linux 6.8 to access the Scarlett Gen 4 support.
 
 ## Building the Driver
 
