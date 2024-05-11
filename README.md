@@ -56,7 +56,7 @@ Linux 6.10 to access the Vocaster support.
 ## Building the Driver
 
 If you want to build an entire kernel from source, check the
-`vocaster` branch. Otherwise, visit the
+`scarlett2` branch. Otherwise, visit the
 [Releases](https://github.com/geoffreybennett/scarlett-gen2/releases)
 page to download a backport of just the `snd_usb_audio` module, which
 can be built against your running kernel.
