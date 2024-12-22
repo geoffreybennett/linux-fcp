@@ -1,68 +1,156 @@
-# Linux ALSA Focusrite Scarlett2 USB Protocol Mixer Driver
+# Linux ALSA Focusrite Control/Mixer Drivers
 
 ## Overview
 
-The Focusrite USB audio interfaces are class compliant, meaning that
-they work “out of the box” on Linux as audio and MIDI interfaces
-(although on Gen 3/4/Vocaster you need to disable MSD mode first for
-full functionality). However, except for some of the smallest models,
-this kernel driver is required to access the full range of features of
-these interfaces.
+Focusrite USB audio interfaces are class compliant, meaning they work
+“out of the box” on Linux as audio and MIDI interfaces\*.
 
-This driver is an extension to ALSA, specifically to the
-`snd_usb_audio` module.
+However, to access device-specific features (like direct monitoring,
+hardware mixing, custom routing, and level meters), most models need
+additional driver support.
+
+This repository provides two drivers that extend the Linux kernel’s
+audio subsystem (ALSA), adding controls to make those features
+available:
+
+- **Scarlett2**: A mature kernel driver supporting nearly every
+  Focusrite USB device from the 2nd Gen Scarlett range onwards.
+
+- **FCP**: A new hybrid kernel/user-space driver with support for the
+  new big 4th Gen Scarlett models (16i16, 18i16, and 18i20).
+
+Note:
+
+- Scarlett 1st Gen devices are supported by the Scarlett driver which
+  has been in the Linux kernel since 2014.
+
+- Scarlett 2nd Gen Solo, 2i2, and 2i4 have no software-accessible
+  controls, so no need for any special driver. All device-specific
+  functionality is accessible from the front panel.
+
+\* Scarlett 3rd and 4th Gen and Vocaster interfaces need MSD (Mass
+Storage Device/“Easy Start”) mode disabled for full functionality.
+This will be done automatically when you do a firmware update.
 
 ## Supported Interfaces
 
-The interfaces currently supported are:
-- Scarlett 2nd Gen 6i6, 18i8, 18i20
-- Scarlett 3rd Gen Solo, 2i2, 4i4, 8i6, 18i8, 18i20
-- Scarlett 4th Gen Solo, 2i2, 4i4
-- Clarett 2Pre, 4Pre, 8Pre USB
-- Clarett+ 2Pre, 4Pre, 8Pre
-- Vocaster One and Vocaster Two
+### Scarlett2 Driver
 
-## Minimum Kernel Version Required
+Scarlett Series:
+- 2nd Gen: 6i6, 18i8, 18i20
+- 3rd Gen: Solo, 2i2, 4i4, 8i6, 18i8, 18i20
+- 4th Gen: Solo, 2i2, 4i4
 
-This driver is already a part of the mainstream Linux kernel since
-Linux kernel version 5.4. Depending on the particular interface you
-have, you might have the driver for your interface already installed:
+Clarett USB and Clarett+ Series:
+- 2Pre, 4Pre, 8Pre
 
-- Scarlett Gen 2: Supported since Linux 5.4 (bug fixes in Linux 5.14)
-- Scarlett Gen 3: Supported since Linux 5.14
-- Clarett+ 8Pre: Supported since Linux 6.1
-- Clarett 2Pre/4Pre/8Pre USB, Clarett+ 2Pre/4Pre: Supported since
-  Linux 6.7
-- Scarlett Gen 4: Supported since Linux 6.8
-- Vocaster: Submitted upstream, should appear in Linux 6.10
+Vocaster Series:
+- One, Two
 
-Note: From Linux 6.7 onwards, the driver is enabled by default and
-this is the first version where the level meters work.
+### FCP Driver
 
-**It's recommended that you use at least 6.7, or install the
-backported driver (see below).**
+Scarlett 4th Gen:
+- 16i16, 18i16, 18i20
+
+## Kernel Version Requirements
+
+If your device is supported by the Scarlett2 driver and your Linux
+kernel meets the minimum version listed below, you don’t need to
+install this driver as you already have it; jump ahead to the [Setup
+Instructions](#setup-instructions).
+
+The `scarlett2` driver is already included in the Linux kernel:
+
+- Scarlett 2nd Gen: Since Linux 5.4 (bug fixes in 5.14 and 6.7)
+- Scarlett 3rd Gen: Since Linux 5.14 (bug fixes in 6.7)
+- Clarett+ 8Pre: Since Linux 6.1 (bug fixes in 6.7)
+- Clarett USB and Clarett+ (2Pre/4Pre/8Pre): Since Linux 6.7
+- Scarlett 4th Gen (Solo/2i2/4i4): Since Linux 6.8
+- Vocaster: Since Linux 6.10
+
+The `fcp` driver is currently only available in this repository.
 
 ## Repository Purpose
 
 This repository is a fork of the Linux kernel, used for:
 
-1) Sharing the development code before it arrives in the mainstream
-kernel.
+1. Sharing development code before it arrives in the mainstream kernel
 
-2) Sharing backports for the `snd_usb_audio` module so that you don't
-have to wait for Linux 6.8 to access the Scarlett Gen 4 support or
-Linux 6.10 to access the Vocaster support.
+2. Sharing backports of the `scarlett2` and `fcp` drivers so you don’t
+   have to wait for your distribution to update to the kernel version
+   you need.
 
-## Building the Driver
+## Installation Options
 
-If you want to build an entire kernel from source, check the
-`scarlett2` branch. Otherwise, visit the
-[Releases](https://github.com/geoffreybennett/scarlett-gen2/releases)
-page to download a backport of just the `snd_usb_audio` module, which
-can be built against your running kernel.
+1. Module Installation (recommended):
 
-## Usage Instructions
+    - Download from
+      [Releases](https://github.com/geoffreybennett/linux-fcp/releases)
+    - Build and install the `snd_usb_audio` module following the
+      instructions in the enclosed `README.md`.
 
-To use the controls introduced by this driver, please refer to the
-dedicated GUI application repository: [ALSA Scarlett
-GUI](https://github.com/geoffreybennett/alsa-scarlett-gui).
+2. Full Kernel Build:
+
+    - Check out the `fcp` branch
+    - Build the kernel normally
+
+## Setup Instructions
+
+### Scarlett2 Driver
+
+- Install the
+  [firmware](https://github.com/geoffreybennett/scarlett2-firmware).
+
+- Install and run [ALSA Scarlett
+  GUI](https://github.com/geoffreybennett/alsa-scarlett-gui) to update
+  your firmware and configure your device.
+
+### FCP Driver
+
+- Install the
+  [firmware](https://github.com/geoffreybennett/scarlett4-firmware).
+
+- Install the `fcp-server` user-space driver and the `fcp-firmware`
+  firmware update utility from the
+  [fcp-support](https://github.com/geoffreybennett/fcp-support) repo.
+
+- Update your firmware with `fcp-firmware`.
+
+- Install and run [ALSA Scarlett
+  GUI](https://github.com/geoffreybennett/alsa-scarlett-gui) to
+  configure your device.
+
+## Support
+
+Please report any issues here:
+
+- https://github.com/geoffreybennett/linux-fcp/issues
+
+## Contact
+
+- Author: Geoffrey D. Bennett
+- Email: g@b4.vu
+- GitHub: https://github.com/geoffreybennett
+
+## Donations
+
+This software, including the driver, tools, and GUI is Free Software
+that I’ve independently developed using my own resources. It
+represents hundreds of hours of development work.
+
+If you find this software valuable, please consider making a donation.
+Your show of appreciation, more than the amount itself, motivates me
+to continue improving these tools.
+
+You can donate via:
+
+- LiberaPay: https://liberapay.com/gdb
+- PayPal: https://paypal.me/gdbau
+- Zelle: g@b4.vu
+
+## Disclaimer Third Parties
+
+Focusrite, Scarlett, Clarett, and Vocaster are trademarks or
+registered trademarks of Focusrite Audio Engineering Limited in
+England, USA, and/or other countries. Use of these trademarks does not
+imply any affiliation or endorsement of this software.
